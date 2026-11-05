@@ -12,7 +12,10 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTabbedPane;
+import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 
 /** The suite tab: a welcome page plus one tab per capture. */
 final class MainPanel extends JPanel {
@@ -23,11 +26,25 @@ final class MainPanel extends JPanel {
     private int counter;
     private boolean settingsOpen;
 
-    MainPanel(Settings st, Consumer<Settings> persist, Consumer<Component> themer) {
+    /** Project-scoped storage for captures (backed by Burp's extension data, like Repeater tabs). */
+    interface CaptureStore {
+        List<String> load();
+
+        void save(List<String> serialized);
+    }
+
+    private final CaptureStore store;
+    private final javax.swing.Timer saveTimer;
+    private boolean restoring;
+
+    MainPanel(Settings st, Consumer<Settings> persist, Consumer<Component> themer, CaptureStore store) {
         super(new BorderLayout());
         this.st = st;
         this.persist = persist;
         this.themer = themer;
+        this.store = store;
+        saveTimer = new javax.swing.Timer(800, e -> saveNow());
+        saveTimer.setRepeats(false);
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         JButton fresh = new JButton("New empty capture");
         fresh.addActionListener(e -> addCapture("manual", "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html></html>"));
@@ -53,6 +70,58 @@ final class MainPanel extends JPanel {
         help.setVerticalAlignment(JLabel.TOP);
         tabs.addTab("Welcome", new JScrollPane(help));
         add(tabs, BorderLayout.CENTER);
+        tabs.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int i = tabs.indexAtLocation(e.getX(), e.getY());
+                if (e.getClickCount() == 2 && i > 0) {
+                    Object n = JOptionPane.showInputDialog(MainPanel.this, "Tab name:", tabs.getTitleAt(i));
+                    if (n != null && !n.toString().trim().isEmpty()) {
+                        tabs.setTitleAt(i, n.toString().trim());
+                        saveSoon();
+                    }
+                }
+            }
+        });
+        restore();
+    }
+
+    private void restore() {
+        restoring = true;
+        try {
+            for (String json : store.load()) {
+                try {
+                    Store.Restored r = Store.deserialize(json);
+                    if (!r.blocks.isEmpty()) addTab(r.title, r.scale, r.blocks, false);
+                } catch (Exception ignored) {
+                    // skip unreadable capture
+                }
+            }
+            if (tabs.getTabCount() > 1) tabs.setSelectedIndex(1);
+        } finally {
+            restoring = false;
+        }
+    }
+
+    void saveSoon() {
+        if (!restoring) saveTimer.restart();
+    }
+
+    /** Writes every capture to the project file now. */
+    void saveNow() {
+        saveTimer.stop();
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < tabs.getTabCount(); i++) {
+            Component c = tabs.getComponentAt(i);
+            if (c instanceof CapturePanel) {
+                CapturePanel cp = (CapturePanel) c;
+                out.add(Store.serialize(tabs.getTitleAt(i), cp.scale(), cp.blocks()));
+            }
+        }
+        try {
+            store.save(out);
+        } catch (Exception ignored) {
+        }
     }
 
     void addCapture(String title, String request, String response) {
@@ -63,15 +132,21 @@ final class MainPanel extends JPanel {
             rq.separatorAfter = true;
             blocks.add(Block.http(Block.Kind.RESPONSE, response, st));
         }
+        String t = "#" + (++counter) + " " + (title.length() > 28 ? title.substring(0, 28) + "..." : title);
+        addTab(t, st.scale, blocks, true);
+    }
+
+    private void addTab(String title, double scale, List<Block> blocks, boolean select) {
         final CapturePanel[] holder = new CapturePanel[1];
-        holder[0] = new CapturePanel(st, blocks, () -> {
+        holder[0] = new CapturePanel(st, blocks, scale, () -> {
             holder[0].disposeWindows();
             tabs.remove(holder[0]);
-        }, this::openSettings);
+            saveSoon();
+        }, this::openSettings, this::saveSoon);
         themer.accept(holder[0]);
-        String t = "#" + (++counter) + " " + (title.length() > 28 ? title.substring(0, 28) + "..." : title);
-        tabs.addTab(t, holder[0]);
-        tabs.setSelectedComponent(holder[0]);
+        tabs.addTab(title, holder[0]);
+        if (select) tabs.setSelectedComponent(holder[0]);
+        saveSoon();
     }
 
     void openSettings() {

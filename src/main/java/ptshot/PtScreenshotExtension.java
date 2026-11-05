@@ -45,7 +45,28 @@ public class PtScreenshotExtension implements BurpExtension {
                 for (Map.Entry<String, String> e : s.toMap().entrySet()) {
                     api.persistence().preferences().setString("ptshot." + e.getKey(), e.getValue());
                 }
-            }, c -> api.userInterface().applyThemeToComponent(c));
+            }, c -> api.userInterface().applyThemeToComponent(c), new MainPanel.CaptureStore() {
+                private static final String COUNT = "ptshot.captures.count";
+
+                public List<String> load() {
+                    List<String> l = new ArrayList<>();
+                    burp.api.montoya.persistence.PersistedObject d = api.persistence().extensionData();
+                    Integer n = d.getInteger(COUNT);
+                    for (int i = 0; n != null && i < n; i++) {
+                        String s = d.getString("ptshot.capture." + i);
+                        if (s != null) l.add(s);
+                    }
+                    return l;
+                }
+
+                public void save(List<String> items) {
+                    burp.api.montoya.persistence.PersistedObject d = api.persistence().extensionData();
+                    Integer old = d.getInteger(COUNT);
+                    for (int i = 0; i < items.size(); i++) d.setString("ptshot.capture." + i, items.get(i));
+                    for (int i = items.size(); old != null && i < old; i++) d.deleteString("ptshot.capture." + i);
+                    d.setInteger(COUNT, items.size());
+                }
+            });
             api.userInterface().applyThemeToComponent(panel);
             api.userInterface().registerSuiteTab("PT Screenshot", panel);
         });
@@ -68,7 +89,10 @@ public class PtScreenshotExtension implements BurpExtension {
         });
 
         api.extension().registerUnloadingHandler(() -> {
-            if (panel != null) panel.disposeWindows();
+            if (panel != null) {
+                panel.saveNow();
+                panel.disposeWindows();
+            }
         });
         api.logging().logToOutput("PT Screenshot Builder loaded. Right-click a request -> Extensions -> PT Screenshot Builder.");
     }

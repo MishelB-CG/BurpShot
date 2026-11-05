@@ -158,6 +158,11 @@ final class Block {
         return sp < 0 ? "" : n.substring(sp + 2);
     }
 
+    /** The message body (as captured, before filters / edits). */
+    String bodyText() {
+        return body();
+    }
+
     /** Lines of the head; index 0 is the request/status line. */
     List<String> headLines() {
         List<String> l = new ArrayList<>();

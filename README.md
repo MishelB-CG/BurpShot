@@ -31,6 +31,25 @@ Build from source: `gradle jar` (output in `build/libs/`), or
 6. **Global settings** - default label font (Calibri, red), body font (defaults to Burp's message-editor font),
    colours, separator, spacing, syntax colours, wrap/max-lines defaults, output scale. Stored in Burp's preferences.
 
+## Rendered HTML in screenshots
+Two ways to add a rendered page (both end in a drag-a-rectangle picker, and the result becomes an image block that you can
+move, resize, centre, separate and point an arrow at):
+* **Render selection / body...** (Content tab) - select HTML code in the response text (or select nothing to use the whole body).
+  It is rendered with Swing's HTML engine at an adjustable width. This engine is HTML 3.2 + a CSS subset: fine for forms,
+  error pages, injected links/tables; not a browser. Scripts, frames, stylesheets, CSS `url()` and images are stripped
+  (images become `[image: alt]`), form controls are drawn as `[ text ]`, so rendering an untrusted response never touches the network.
+* **Capture screen region...** - for pixel-exact output: press **Render** on the response in Burp, press the button, switch back
+  to Burp's Render view during the countdown, then drag the region you want. Multi-monitor and HiDPI aware.
+  On macOS, Burp needs Screen Recording permission.
+
+## Persistence
+Captures are saved automatically (about a second after every change) into the **Burp project file** via the
+extension-data API - the same way Repeater tabs persist - and restored when the project is reopened or the extension
+is reloaded. Everything is kept: text, filters, annotations, per-block fonts/styles, layout, separators, image blocks
+and output scale. Double-click a capture tab to rename it; closing a tab deletes it from the project.
+Global settings (fonts, colours, defaults) are stored separately in Burp's user preferences.
+Temporary projects are not saved by Burp itself, so captures vanish with them.
+
 ## Notes
 * Fonts: Calibri is used if installed (on Linux, Carlito is substituted). Any installed font family can be typed in.
 * Pixelate/blur only touch the exported pixels; the original data never leaves the tab. Use a large cell size

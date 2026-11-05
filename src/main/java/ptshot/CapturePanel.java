@@ -53,7 +53,7 @@ final class CapturePanel extends JPanel {
     private static final Pattern HDR_PREFIX = Pattern.compile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+:\\s*");
 
     private final Settings st;
-    private final Runnable onClose, openSettings;
+    private final Runnable onClose, openSettings, onChanged;
     private final DefaultListModel<Block> model = new DefaultListModel<>();
     private final JList<Block> list = new JList<>(model);
     private final PreviewPanel preview = new PreviewPanel();
@@ -90,12 +90,13 @@ final class CapturePanel extends JPanel {
     private OptColor bgOpt, sepOpt;
     private JSpinner sepWidth, wrapCols, maxLines, imgMax;
 
-    CapturePanel(Settings st, List<Block> init, Runnable onClose, Runnable openSettings) {
+    CapturePanel(Settings st, List<Block> init, double scale, Runnable onClose, Runnable openSettings, Runnable onChanged) {
         super(new BorderLayout());
         this.st = st;
         this.onClose = onClose;
         this.openSettings = openSettings;
-        this.scale = st.scale;
+        this.scale = scale;
+        this.onChanged = onChanged;
         for (Block b : init) model.addElement(b);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buildLeft(), buildRight());
@@ -236,8 +237,13 @@ final class CapturePanel extends JPanel {
         adds.add(btn("Arrow", "Arrow starting at the selected text", e -> addAnn(Annotation.Type.ARROW)));
         adds.add(btn("Pixelate", "Pixelate the selected text", e -> addAnn(Annotation.Type.PIXELATE)));
         adds.add(btn("Blur", "Blur the selected text", e -> addAnn(Annotation.Type.BLUR)));
+        JPanel html = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
+        html.add(new JLabel("Rendered HTML:"));
+        html.add(btn("Render selection / body...", "Render the selected HTML code (or the whole response body) and pick a region to add as an image block", e -> renderHtmlAction()));
+        html.add(btn("Capture screen region...", "Grab the screen after a delay (e.g. Burp's Render tab) and pick a region to add as an image block", e -> screenAction()));
         JPanel south = new JPanel();
         south.setLayout(new BoxLayout(south, BoxLayout.Y_AXIS));
+        south.add(html);
         south.add(ops);
         south.add(ops2);
         south.add(adds);
@@ -439,7 +445,11 @@ final class CapturePanel extends JPanel {
         return ((Number) s.getValue()).doubleValue();
     }
 
-    private List<Block> blocks() {
+    double scale() {
+        return scale;
+    }
+
+    List<Block> blocks() {
         List<Block> l = new ArrayList<>();
         for (int i = 0; i < model.size(); i++) l.add(model.get(i));
         return l;
@@ -668,6 +678,48 @@ final class CapturePanel extends JPanel {
         ta.setCaretPosition(Math.min(ls, out.length()));
     }
 
+    // ================================================================== rendered HTML
+
+    private void insertImage(BufferedImage img, double pixelRatio) {
+        Block b = Block.image(img);
+        b.imageMaxWidth = Math.max(40, Math.min(900, (int) Math.round(img.getWidth() / pixelRatio)));
+        insert(b);
+        status.setText("Added image block " + img.getWidth() + " x " + img.getHeight() + " px.");
+    }
+
+    private void renderHtmlAction() {
+        if (cur == null || cur.kind == Block.Kind.IMAGE) return;
+        String sel = ta.getSelectedText();
+        String html = (sel != null && !sel.trim().isEmpty()) ? sel : (cur.isHttp() ? cur.bodyText() : ta.getText());
+        if (!html.contains("<")) {
+            status.setText("No HTML found - select HTML code in the text box, or pick a response with an HTML body.");
+            return;
+        }
+        final String src = html;
+        BufferedImage first = Html.render(src, 700, 2.0);
+        BufferedImage out = ImagePicker.show(SwingUtilities.getWindowAncestor(this),
+                "Rendered HTML - drag to select the part to include", first, w -> Html.render(src, w, 2.0), 700);
+        if (out != null) insertImage(out, 2.0);
+    }
+
+    private void screenAction() {
+        java.awt.Window w = SwingUtilities.getWindowAncestor(this);
+        JSpinner delay = ispin(5, 1, 60, 1);
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        row.add(new JLabel("Delay (seconds):"));
+        row.add(delay);
+        int r = JOptionPane.showConfirmDialog(w, new Object[]{
+                "<html>After you press OK, switch to the view to capture - for example the response's<br>"
+                        + "<b>Render</b> tab in Burp (press Render there first). The screen is grabbed when the<br>"
+                        + "countdown ends and you then select the region to include.</html>", row},
+                "Capture screen region", JOptionPane.OK_CANCEL_OPTION);
+        if (r != JOptionPane.OK_OPTION) return;
+        ScreenGrab.grab(ival(delay), (img, ratio) -> {
+            BufferedImage out = ImagePicker.show(SwingUtilities.getWindowAncestor(this), "Select the region to include", img, null, 0);
+            if (out != null) insertImage(out, ratio);
+        }, msg -> status.setText(msg));
+    }
+
     // ================================================================== annotations
 
     private void addAnn(Annotation.Type type) {
@@ -769,6 +821,7 @@ final class CapturePanel extends JPanel {
 
     void refresh() {
         timer.restart();
+        onChanged.run();
     }
 
     BufferedImage renderNow() {
