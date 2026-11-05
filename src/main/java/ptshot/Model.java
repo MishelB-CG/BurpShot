@@ -302,6 +302,8 @@ final class Settings {
     Color sepColor = new Color(170, 170, 170);
     int sepWidth = 1, margin = 14, rowGap = 12, colGap = 24, labelGap = 4;
     int wrapCols = 100, maxLines = 30;
+    double labelRatio = 1.4; // label size = body size x ratio (0 = use the fixed size of the label font)
+    int maxWidth = 900;   // max screenshot width in 1x pixels (0 = unlimited)
     boolean wrap = true;
     double scale = 2.0;
     Color[] syn = {new Color(0, 0, 128), new Color(0, 128, 0), new Color(0, 0, 255), new Color(0, 0, 205),
@@ -341,6 +343,8 @@ final class Settings {
         m.put("wrapCols", "" + wrapCols);
         m.put("maxLines", "" + maxLines);
         m.put("wrap", "" + wrap);
+        m.put("maxWidth", "" + maxWidth);
+        m.put("labelRatio", "" + labelRatio);
         m.put("scale", "" + scale);
         for (int i = 0; i < syn.length; i++) m.put("syn" + i, hex(syn[i]));
         return m;
@@ -365,6 +369,11 @@ final class Settings {
         labelGap = num(g.apply("labelGap"), labelGap);
         wrapCols = num(g.apply("wrapCols"), wrapCols);
         maxLines = num(g.apply("maxLines"), maxLines);
+        maxWidth = num(g.apply("maxWidth"), maxWidth);
+        try {
+            if (g.apply("labelRatio") != null) labelRatio = Double.parseDouble(g.apply("labelRatio"));
+        } catch (Exception ignored) {
+        }
         if (g.apply("wrap") != null) wrap = Boolean.parseBoolean(g.apply("wrap"));
         try {
             if (g.apply("scale") != null) scale = Double.parseDouble(g.apply("scale"));

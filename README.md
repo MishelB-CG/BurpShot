@@ -31,6 +31,16 @@ Build from source: `gradle jar` (output in `build/libs/`), or
 6. **Global settings** - default label font (Calibri, red), body font (defaults to Burp's message-editor font),
    colours, separator, spacing, syntax colours, wrap/max-lines defaults, output scale. Stored in Burp's preferences.
 
+## Keeping screenshots from getting too wide
+Every capture has a **Max width (px)** box in the preview toolbar (default 900 at 1x, `0` = unlimited; the default
+for new captures is in Global settings). It is a hard limit on the final image width:
+* text wraps to fit, preferring natural break points (after spaces and `& , ; / ? = - ) ] }`) before hard-breaking;
+* blocks placed **beside** each other share the width (narrow blocks keep theirs, wide ones split the rest);
+* images shrink to fit;
+* annotations, syntax colours and Burp-style colouring follow the wrapped lines.
+Per-block *Wrap at columns* still applies on top (the narrower of the two wins), and *Wrap long lines* off cuts lines with `...` instead.
+The value is saved with the capture.
+
 ## Rendered HTML in screenshots
 Two ways to add a rendered page (both end in a drag-a-rectangle picker, and the result becomes an image block that you can
 move, resize, centre, separate and point an arrow at):
@@ -51,6 +61,8 @@ Global settings (fonts, colours, defaults) are stored separately in Burp's user 
 Temporary projects are not saved by Burp itself, so captures vanish with them.
 
 ## Notes
+* Label size: by default "Request"/"Response" labels are 1.4x the body font size, so they keep their proportion whatever font size
+  Burp uses (Global settings -> "Label size = body size x"; set 0 for a fixed size, or give a block its own label font to override).
 * Fonts: Calibri is used if installed (on Linux, Carlito is substituted). Any installed font family can be typed in.
 * Pixelate/blur only touch the exported pixels; the original data never leaves the tab. Use a large cell size
   for secrets - light blur or tiny cells can sometimes be reversed.

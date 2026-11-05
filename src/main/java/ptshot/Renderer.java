@@ -91,11 +91,47 @@ final class Renderer {
     }
 
     static BufferedImage render(List<Block> blocks, Settings st, double S) {
+        return render(blocks, st, S, st.maxWidth);
+    }
+
+    /** @param maxWidth maximum image width in 1x pixels (0 = unlimited); text wraps and images shrink to fit. */
+    static BufferedImage render(List<Block> blocks, Settings st, double S, int maxWidth) {
         BufferedImage scratch = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
         Graphics2D mg = scratch.createGraphics();
         hints(mg);
+        int margin = px(st.margin, S), rowGap = px(st.rowGap, S), colGap = px(st.colGap, S);
+        int innerLimit = maxWidth > 0 ? Math.max(px(100, S), px(maxWidth, S) - 2 * margin) : 0;
+
+        // group blocks into rows first, so side-by-side blocks can share the available width
+        List<List<Block>> brow = new ArrayList<>();
+        for (Block b : blocks) {
+            if (b.beside && !brow.isEmpty()) brow.get(brow.size() - 1).add(b);
+            else {
+                List<Block> r = new ArrayList<>();
+                r.add(b);
+                brow.add(r);
+            }
+        }
         List<Laid> all = new ArrayList<>();
-        for (Block b : blocks) all.add(measure(b, st, S, mg));
+        List<List<Laid>> rows = new ArrayList<>();
+        for (List<Block> br : brow) {
+            int n = br.size();
+            int avail = innerLimit > 0 ? Math.max(px(60, S), innerLimit - colGap * (n - 1)) : 0;
+            List<Laid> r = new ArrayList<>();
+            for (Block b : br) r.add(measure(b, st, S, mg, avail));
+            if (avail > 0 && n > 1) {
+                int sum = 0;
+                for (Laid a : r) sum += a.w;
+                if (sum > avail) {
+                    int[] w = new int[n];
+                    for (int i = 0; i < n; i++) w[i] = r.get(i).w;
+                    int[] allowed = share(w, avail);
+                    for (int i = 0; i < n; i++) if (r.get(i).w > allowed[i]) r.set(i, measure(br.get(i), st, S, mg, allowed[i]));
+                }
+            }
+            rows.add(r);
+            all.addAll(r);
+        }
         mg.dispose();
         if (all.isEmpty()) {
             BufferedImage e = new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB);
@@ -106,18 +142,6 @@ final class Renderer {
             return e;
         }
 
-        int margin = px(st.margin, S), rowGap = px(st.rowGap, S), colGap = px(st.colGap, S);
-
-        // ---- arrange into rows ----
-        List<List<Laid>> rows = new ArrayList<>();
-        for (Laid a : all) {
-            if (a.b.beside && !rows.isEmpty()) rows.get(rows.size() - 1).add(a);
-            else {
-                List<Laid> r = new ArrayList<>();
-                r.add(a);
-                rows.add(r);
-            }
-        }
         int inner = 0;
         for (List<Laid> r : rows) {
             int w = 0;
@@ -205,6 +229,30 @@ final class Renderer {
 
     // ------------------------------------------------------------------ measuring
 
+    /** Water-filling: blocks narrower than an equal share keep their width, the rest split what is left. */
+    private static int[] share(int[] want, int total) {
+        int n = want.length;
+        int[] out = new int[n];
+        boolean[] fixed = new boolean[n];
+        int remaining = total, open = n;
+        boolean changed = true;
+        while (changed && open > 0) {
+            changed = false;
+            int eq = remaining / open;
+            for (int i = 0; i < n; i++) {
+                if (!fixed[i] && want[i] <= eq) {
+                    fixed[i] = true;
+                    out[i] = want[i];
+                    remaining -= want[i];
+                    open--;
+                    changed = true;
+                }
+            }
+        }
+        for (int i = 0; i < n; i++) if (!fixed[i]) out[i] = Math.max(1, remaining / Math.max(1, open));
+        return out;
+    }
+
     private static int px(double v, double S) {
         return (int) Math.round(v * S);
     }
@@ -222,11 +270,17 @@ final class Renderer {
         return new Rectangle(r.x - d, r.y - d, r.width + 2 * d, r.height + 2 * d);
     }
 
-    private static Laid measure(Block b, Settings st, double S, Graphics2D mg) {
+    private static Laid measure(Block b, Settings st, double S, Graphics2D mg, int limit) {
         Laid a = new Laid();
         a.b = b;
         a.frc = mg.getFontRenderContext();
         FontSpec ls = b.labelFont != null ? b.labelFont : st.labelFont;
+        if (b.labelFont == null && st.labelRatio > 0 && b.kind != Block.Kind.IMAGE) {
+            // default labels track the body font so "Request"/"Response" keep the same proportion at any Burp font size
+            FontSpec bs0 = b.bodyFont != null ? b.bodyFont : st.bodyFont;
+            ls = ls.copy();
+            ls.size = Math.max(6, (int) Math.round(bs0.size * st.labelRatio));
+        }
         if (b.showLabel && b.label != null && !b.label.isEmpty()) {
             a.label = b.label;
             a.lf = ls.toFont(S);
@@ -241,6 +295,7 @@ final class Renderer {
             a.img = b.image;
             if (a.img != null) {
                 double k = Math.min(1.0, b.imageMaxWidth / (double) a.img.getWidth()) * S;
+                if (limit > 0 && a.img.getWidth() * k > limit) k = limit / (double) a.img.getWidth();
                 a.imgW = Math.max(1, (int) Math.round(a.img.getWidth() * k));
                 a.imgH = Math.max(1, (int) Math.round(a.img.getHeight() * k));
             }
@@ -253,7 +308,8 @@ final class Renderer {
             FontMetrics fm = mg.getFontMetrics(a.bf);
             a.lineH = fm.getHeight();
             a.asc = fm.getAscent();
-            layoutLines(a, b);
+            a.bpad = b.background != null ? px(6, S) : 0;
+            layoutLines(a, b, limit);
             double mw = 0;
             for (VLine v : a.lines) mw = Math.max(mw, a.sw(a.bf, v.text));
             a.textW = (int) Math.ceil(mw);
@@ -268,11 +324,15 @@ final class Renderer {
         return a;
     }
 
-    private static void layoutLines(Laid a, Block b) {
+    private static void layoutLines(Laid a, Block b, int limit) {
         String text = b.text;
         if (text == null || text.isEmpty()) return;
         double maxPx = b.wrapCols > 0 ? a.sw(a.bf, "0") * b.wrapCols : 0;
-        int limit = b.maxLines > 0 ? Math.min(b.maxLines, HARD_LINE_CAP) : HARD_LINE_CAP;
+        if (limit > 0) {
+            double fit = Math.max(a.sw(a.bf, "0") * 8, limit - 2.0 * a.bpad);
+            maxPx = maxPx > 0 ? Math.min(maxPx, fit) : fit;
+        }
+        int lineCap = b.maxLines > 0 ? Math.min(b.maxLines, HARD_LINE_CAP) : HARD_LINE_CAP;
         int off = 0;
         boolean truncated = false;
         outer:
@@ -280,22 +340,29 @@ final class Renderer {
             if (maxPx <= 0 || a.sw(a.bf, line) <= maxPx) {
                 a.lines.add(new VLine(line, off, off + line.length()));
             } else if (b.wrap) {
-                int st = 0;
+                int st = 0, n = line.length();
+                double[] cw = new double[n];
+                for (int i = 0; i < n; i++) cw[i] = a.sw(a.bf, line.substring(i, i + 1));
                 double w = 0;
-                for (int i = 0; i < line.length(); i++) {
-                    double cw = a.sw(a.bf, line.substring(i, i + 1));
-                    if (w + cw > maxPx && i > st) {
-                        a.lines.add(new VLine(line.substring(st, i), off + st, off + i));
-                        if (a.lines.size() > limit) {
+                int lastBreak = -1;
+                for (int i = 0; i < n; i++) {
+                    if (w + cw[i] > maxPx && i > st) {
+                        // prefer a natural break (after space & , ; / ? = - ) ] }) if it isn't too early in the line
+                        int cut = (lastBreak > st && (lastBreak - st) * 3 >= (i - st)) ? lastBreak : i;
+                        a.lines.add(new VLine(line.substring(st, cut), off + st, off + cut));
+                        if (a.lines.size() > lineCap) {
                             truncated = true;
                             break outer;
                         }
-                        st = i;
+                        st = cut;
                         w = 0;
+                        for (int j = st; j < i; j++) w += cw[j];
+                        lastBreak = -1;
                     }
-                    w += cw;
+                    w += cw[i];
+                    if (" &,;/?=-)]}|".indexOf(line.charAt(i)) >= 0) lastBreak = i + 1;
                 }
-                a.lines.add(new VLine(line.substring(st), off + st, off + line.length()));
+                a.lines.add(new VLine(line.substring(st), off + st, off + n));
             } else {
                 double dots = a.sw(a.bf, "...");
                 int i = 0;
@@ -309,13 +376,13 @@ final class Renderer {
                 a.lines.add(new VLine(line.substring(0, i) + "...", off, off + i));
             }
             off += line.length() + 1;
-            if (a.lines.size() > limit) {
+            if (a.lines.size() > lineCap) {
                 truncated = true;
                 break;
             }
         }
-        if (truncated || a.lines.size() > limit) {
-            while (a.lines.size() > limit) a.lines.remove(a.lines.size() - 1);
+        if (truncated || a.lines.size() > lineCap) {
+            while (a.lines.size() > lineCap) a.lines.remove(a.lines.size() - 1);
             a.lines.add(new VLine("...", -1, -1));
         }
     }

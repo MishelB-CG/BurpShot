@@ -62,6 +62,7 @@ final class CapturePanel extends JPanel {
     private Block cur;
     private boolean loading;
     private double scale;
+    private int maxWidth;
     private BufferedImage last;
     private final javax.swing.Timer timer;
     private final JLabel status = new JLabel(" ");
@@ -90,12 +91,13 @@ final class CapturePanel extends JPanel {
     private OptColor bgOpt, sepOpt;
     private JSpinner sepWidth, wrapCols, maxLines, imgMax;
 
-    CapturePanel(Settings st, List<Block> init, double scale, Runnable onClose, Runnable openSettings, Runnable onChanged) {
+    CapturePanel(Settings st, List<Block> init, double scale, int maxWidth, Runnable onClose, Runnable openSettings, Runnable onChanged) {
         super(new BorderLayout());
         this.st = st;
         this.onClose = onClose;
         this.openSettings = openSettings;
         this.scale = scale;
+        this.maxWidth = maxWidth;
         this.onChanged = onChanged;
         for (Block b : init) model.addElement(b);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -359,7 +361,7 @@ final class CapturePanel extends JPanel {
         f.span(bodyFont);
         f.span(highlight);
         f.span(bgOpt);
-        f.span(new JLabel("<html><b>Fit</b> (keeps screenshots from getting too wide / tall)</html>"));
+        f.span(new JLabel("<html><b>Fit</b> (also see \"Max width\" in the preview toolbar)</html>"));
         f.row("Wrap at columns (0 = off)", wrapCols);
         f.span(wrap);
         f.row("Max lines (0 = all)", maxLines);
@@ -387,10 +389,18 @@ final class CapturePanel extends JPanel {
             scale = ((Number) sc.getValue()).doubleValue();
             refresh();
         });
+        JSpinner mw = ispin(maxWidth, 0, 5000, 50);
+        mw.setToolTipText("Maximum screenshot width in pixels (at 1x). Text wraps and images shrink to fit. 0 = unlimited.");
+        mw.addChangeListener(e -> {
+            maxWidth = ival(mw);
+            refresh();
+        });
         bar.add(new JLabel("Zoom"));
         bar.add(zoom);
         bar.add(new JLabel("Output scale \u00d7"));
         bar.add(sc);
+        bar.add(new JLabel("Max width (px, 0 = off)"));
+        bar.add(mw);
         bar.add(btn("Preview window", "Open the preview in its own window (screenshot it with an external tool)", e -> openWindow()));
         bar.add(btn("Copy image", "Copy the PNG to the clipboard", e -> copy()));
         bar.add(btn("Save PNG...", "Save as PNG", e -> save()));
@@ -447,6 +457,10 @@ final class CapturePanel extends JPanel {
 
     double scale() {
         return scale;
+    }
+
+    int maxWidth() {
+        return maxWidth;
     }
 
     List<Block> blocks() {
@@ -825,11 +839,11 @@ final class CapturePanel extends JPanel {
     }
 
     BufferedImage renderNow() {
-        last = Renderer.render(blocks(), st, scale);
+        last = Renderer.render(blocks(), st, scale, maxWidth);
         preview.setImage(last);
         if (winPanel != null) winPanel.setImage(last);
         int lw = (int) Math.round(last.getWidth() / scale), lh = (int) Math.round(last.getHeight() / scale);
-        String warn = (lh > 1400 || lw > 1500) ? "   |   Large screenshot - lower max lines / wrap columns, or drop some headers" : "";
+        String warn = (lh > 1400) ? "   |   Tall screenshot - lower max lines or drop some headers" : (maxWidth == 0 && lw > 1200) ? "   |   Wide screenshot - set a max width to wrap it" : "";
         status.setText("Output: " + last.getWidth() + " x " + last.getHeight() + " px (scale " + scale + "x)" + warn);
         return last;
     }

@@ -92,7 +92,7 @@ final class MainPanel extends JPanel {
             for (String json : store.load()) {
                 try {
                     Store.Restored r = Store.deserialize(json);
-                    if (!r.blocks.isEmpty()) addTab(r.title, r.scale, r.blocks, false);
+                    if (!r.blocks.isEmpty()) addTab(r.title, r.scale, r.maxWidth < 0 ? st.maxWidth : r.maxWidth, r.blocks, false);
                 } catch (Exception ignored) {
                     // skip unreadable capture
                 }
@@ -115,7 +115,7 @@ final class MainPanel extends JPanel {
             Component c = tabs.getComponentAt(i);
             if (c instanceof CapturePanel) {
                 CapturePanel cp = (CapturePanel) c;
-                out.add(Store.serialize(tabs.getTitleAt(i), cp.scale(), cp.blocks()));
+                out.add(Store.serialize(tabs.getTitleAt(i), cp.scale(), cp.maxWidth(), cp.blocks()));
             }
         }
         try {
@@ -133,12 +133,12 @@ final class MainPanel extends JPanel {
             blocks.add(Block.http(Block.Kind.RESPONSE, response, st));
         }
         String t = "#" + (++counter) + " " + (title.length() > 28 ? title.substring(0, 28) + "..." : title);
-        addTab(t, st.scale, blocks, true);
+        addTab(t, st.scale, st.maxWidth, blocks, true);
     }
 
-    private void addTab(String title, double scale, List<Block> blocks, boolean select) {
+    private void addTab(String title, double scale, int maxWidth, List<Block> blocks, boolean select) {
         final CapturePanel[] holder = new CapturePanel[1];
-        holder[0] = new CapturePanel(st, blocks, scale, () -> {
+        holder[0] = new CapturePanel(st, blocks, scale, maxWidth, () -> {
             holder[0].disposeWindows();
             tabs.remove(holder[0]);
             saveSoon();

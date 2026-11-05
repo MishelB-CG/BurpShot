@@ -40,6 +40,13 @@ final class SettingsDialog {
 
         f.span(new JLabel("<html><b>Label font</b> (\"Request\" / \"Response\" / custom headers). Default: Calibri, red</html>"));
         f.span(fe[0]);
+        JSpinner ratio = new JSpinner(new SpinnerNumberModel(st.labelRatio, 0.0, 4.0, 0.1));
+        ratio.setToolTipText("Label size = body font size x this value, so labels keep their proportion when Burp's font is large or small. 0 = use the fixed size above.");
+        ratio.addChangeListener(e -> {
+            st.labelRatio = ((Number) ratio.getValue()).doubleValue();
+            changed.run();
+        });
+        f.row("Label size = body size \u00d7 (0 = fixed size above)", ratio);
         f.span(new JLabel("<html><b>Body font</b> (default: Burp's message-editor font)</html>"));
         f.span(fe[1]);
 
@@ -58,7 +65,7 @@ final class SettingsDialog {
 
         JSpinner sw = spin(st.sepWidth, 1, 20), mg = spin(st.margin, 0, 100), rg = spin(st.rowGap, 0, 100),
                 cg = spin(st.colGap, 0, 200), lg = spin(st.labelGap, 0, 50), wc = spin(st.wrapCols, 0, 500),
-                ml = spin(st.maxLines, 0, 600);
+                ml = spin(st.maxLines, 0, 600), mwd = spin(st.maxWidth, 0, 5000);
         JSpinner sc = new JSpinner(new SpinnerNumberModel(st.scale, 1.0, 4.0, 0.5));
         JCheckBox wrap = new JCheckBox("Wrap long lines by default (off = cut with ...)", st.wrap);
         sw.addChangeListener(e -> {
@@ -93,6 +100,10 @@ final class SettingsDialog {
             st.scale = ((Number) sc.getValue()).doubleValue();
             changed.run();
         });
+        mwd.addChangeListener(e -> {
+            st.maxWidth = (Integer) mwd.getValue();
+            changed.run();
+        });
         wrap.addActionListener(e -> {
             st.wrap = wrap.isSelected();
             changed.run();
@@ -104,6 +115,7 @@ final class SettingsDialog {
         f.row("Gap between side-by-side blocks", cg);
         f.row("Gap between label and body", lg);
         f.span(new JLabel("<html><b>Defaults for NEW captures</b> (existing blocks keep their own values)</html>"));
+        f.row("Max screenshot width px (0 = off)", mwd);
         f.row("Wrap at columns (0 = off)", wc);
         f.row("Max lines per block (0 = all)", ml);
         f.span(wrap);

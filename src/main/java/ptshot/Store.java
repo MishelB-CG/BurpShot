@@ -18,15 +18,17 @@ final class Store {
     static final class Restored {
         String title;
         double scale;
+        int maxWidth = -1;
         final List<Block> blocks = new ArrayList<>();
     }
 
     // ------------------------------------------------------------------ save
 
-    static String serialize(String title, double scale, List<Block> blocks) {
+    static String serialize(String title, double scale, int maxWidth, List<Block> blocks) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("title", title);
         m.put("scale", scale);
+        m.put("maxWidth", maxWidth);
         List<Object> bl = new ArrayList<>();
         for (Block b : blocks) bl.add(block(b));
         m.put("blocks", bl);
@@ -104,6 +106,7 @@ final class Store {
         Restored r = new Restored();
         r.title = str(m, "title", "capture");
         r.scale = num(m, "scale", 2.0);
+        r.maxWidth = (int) num(m, "maxWidth", -1);
         for (Object o : (List<Object>) m.getOrDefault("blocks", new ArrayList<>())) r.blocks.add(block((Map<String, Object>) o));
         return r;
     }
