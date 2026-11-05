@@ -30,6 +30,7 @@ final class Annotation {
     int headSize = 16;
     Edge edge = Edge.BOTTOM;
     int dx, dy;
+    double offL, offT, offR, offB; // manual edge adjustments (1x px) made by dragging in the preview
     int strength = 8;       // pixelate cell size / blur radius
 
     static Annotation create(Type t, String anchor, int occurrence) {
@@ -134,6 +135,7 @@ final class Block {
             Annotation c = Annotation.create(a.type, a.anchor, a.occurrence);
             c.color = a.color; c.width = a.width; c.pad = a.pad; c.fullWidth = a.fullWidth; c.blockArrow = a.blockArrow;
             c.angle = a.angle; c.length = a.length; c.headSize = a.headSize; c.edge = a.edge; c.dx = a.dx; c.dy = a.dy;
+            c.offL = a.offL; c.offT = a.offT; c.offR = a.offR; c.offB = a.offB;
             c.strength = a.strength;
             b.annotations.add(c);
         }

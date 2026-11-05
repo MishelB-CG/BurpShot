@@ -24,13 +24,22 @@ final class Store {
 
     // ------------------------------------------------------------------ save
 
+    /** Cheap fingerprint of a capture's editable state (images by identity), used by undo/redo to skip no-op changes. */
+    static String signature(double scale, int maxWidth, List<Block> blocks) {
+        return build("", scale, maxWidth, blocks, false);
+    }
+
     static String serialize(String title, double scale, int maxWidth, List<Block> blocks) {
+        return build(title, scale, maxWidth, blocks, true);
+    }
+
+    private static String build(String title, double scale, int maxWidth, List<Block> blocks, boolean images) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("title", title);
         m.put("scale", scale);
         m.put("maxWidth", maxWidth);
         List<Object> bl = new ArrayList<>();
-        for (Block b : blocks) bl.add(block(b));
+        for (Block b : blocks) bl.add(block(b, images));
         m.put("blocks", bl);
         return Mini.write(m);
     }
@@ -39,7 +48,7 @@ final class Store {
         return c == null ? null : (Object) (c.getRGB() & 0xffffff);
     }
 
-    private static Map<String, Object> block(Block b) {
+    private static Map<String, Object> block(Block b, boolean images) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("kind", b.kind.name());
         m.put("showLabel", b.showLabel);
@@ -52,7 +61,9 @@ final class Store {
         m.put("original", b.original);
         m.put("text", b.text);
         m.put("imageMaxWidth", b.imageMaxWidth);
-        if (b.image != null) {
+        if (b.image != null && !images) {
+            m.put("imageId", System.identityHashCode(b.image) + ":" + b.image.getWidth() + "x" + b.image.getHeight());
+        } else if (b.image != null) {
             try {
                 ByteArrayOutputStream o = new ByteArrayOutputStream();
                 ImageIO.write(b.image, "png", o);
@@ -91,6 +102,10 @@ final class Store {
             x.put("edge", a.edge.name());
             x.put("dx", a.dx);
             x.put("dy", a.dy);
+            x.put("offL", a.offL);
+            x.put("offT", a.offT);
+            x.put("offR", a.offR);
+            x.put("offB", a.offB);
             x.put("strength", a.strength);
             an.add(x);
         }
@@ -182,6 +197,10 @@ final class Store {
             a.edge = Annotation.Edge.valueOf(str(x, "edge", "BOTTOM"));
             a.dx = (int) num(x, "dx", 0);
             a.dy = (int) num(x, "dy", 0);
+            a.offL = num(x, "offL", 0);
+            a.offT = num(x, "offT", 0);
+            a.offR = num(x, "offR", 0);
+            a.offB = num(x, "offB", 0);
             a.strength = (int) num(x, "strength", 8);
             b.annotations.add(a);
         }

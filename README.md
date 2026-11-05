@@ -31,6 +31,18 @@ Build from source: `gradle jar` (output in `build/libs/`), or
 6. **Global settings** - default label font (Calibri, red), body font (defaults to Burp's message-editor font),
    colours, separator, spacing, syntax colours, wrap/max-lines defaults, output scale. Stored in Burp's preferences.
 
+## Live editing in the preview, undo / redo
+* **Click an annotation in the preview** to select it (blue handles). Drag it to **move**; drag a handle to **resize**
+  boxes / pixelate / blur regions (8 handles, min size enforced); for **arrows** drag the tail or head circle
+  (Shift snaps the angle to 15 degrees) or the line to move it. Arrow keys nudge by 1 px (Shift = 10 px),
+  Delete removes the selected annotation, Esc deselects. Clicking one also selects it in the *Annotations* tab.
+* Moves/resizes are stored as adjustments relative to the annotated text, so the annotation still follows its text when
+  you change filters, wrap width or fonts. *Reset position / size* (Annotations tab) snaps it back to the text.
+* **Undo / redo** (toolbar buttons, Ctrl/Cmd+Z, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z) cover every change in a capture: text edits,
+  filters, annotations (add / edit / delete / move / resize), blocks (add / remove / reorder / duplicate), styles, fonts,
+  output scale and max width. Rapid edits (typing, spinners) are merged into one step; each drag is one step. 100 steps are kept
+  per capture; history is not saved in the project, but the resulting state is.
+
 ## Keeping screenshots from getting too wide
 Every capture has a **Max width (px)** box in the preview toolbar (default 900 at 1x, `0` = unlimited; the default
 for new captures is in Global settings). It is a hard limit on the final image width:

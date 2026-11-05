@@ -67,6 +67,21 @@ final class CapturePanel extends JPanel {
     private final javax.swing.Timer timer;
     private final JLabel status = new JLabel(" ");
     private JTabbedPane tabs;
+    private JSpinner scaleSpin, widthSpin;
+    private JButton undoBtn, redoBtn;
+
+    // undo / redo
+    private static final class Snap {
+        final List<Block> blocks = new ArrayList<>();
+        double scale;
+        int maxWidth, sel;
+        String sig;
+    }
+
+    private final java.util.ArrayDeque<Snap> undo = new java.util.ArrayDeque<>();
+    private final java.util.ArrayDeque<Snap> redo = new java.util.ArrayDeque<>();
+    private Snap committed;
+    private javax.swing.Timer histTimer;
 
     // content tab
     private JCheckBox incFirst, incHeaders, incBody, pretty;
@@ -107,6 +122,34 @@ final class CapturePanel extends JPanel {
         add(split, BorderLayout.CENTER);
         timer = new javax.swing.Timer(120, e -> renderNow());
         timer.setRepeats(false);
+        histTimer = new javax.swing.Timer(500, e -> commitHistory());
+        histTimer.setRepeats(false);
+        preview.setEditor(new PreviewPanel.Editor() {
+            public void picked(Annotation a) {
+                pickAnnotation(a);
+            }
+
+            public void begin() {
+                commitHistory(); // everything before the drag becomes its own undo step
+            }
+
+            public void edited() {
+                renderNow();
+                loadAnn();
+                onChanged.run();
+                histTimer.restart();
+            }
+
+            public void end() {
+                commitHistory();
+                onChanged.run();
+            }
+
+            public void delete(Annotation a) {
+                deleteAnnotation(a);
+            }
+        });
+        installUndoKeys();
         list.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) select(list.getSelectedValue());
         });
@@ -115,6 +158,8 @@ final class CapturePanel extends JPanel {
         });
         if (!model.isEmpty()) list.setSelectedIndex(0);
         renderNow();
+        committed = snap();
+        updateUndoButtons();
     }
 
     // ================================================================== layout
@@ -274,6 +319,7 @@ final class CapturePanel extends JPanel {
         sp.setPreferredSize(new Dimension(300, 90));
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
         bar.add(btn("Remove", "Remove the selected annotation", e -> removeAnn()));
+        bar.add(btn("Reset position / size", "Undo manual moves and resizes made in the preview (the annotation snaps back to its text)", e -> resetAdjust()));
         bar.add(btn("Re-anchor to selection", "Attach the selected annotation to the text currently selected in the Content tab", e -> reanchor()));
         JPanel top = new JPanel(new BorderLayout());
         top.add(sp, BorderLayout.CENTER);
@@ -378,34 +424,44 @@ final class CapturePanel extends JPanel {
 
     private JPanel buildRight() {
         JPanel p = new JPanel(new BorderLayout());
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
+        JPanel bar = new JPanel();
+        bar.setLayout(new BoxLayout(bar, BoxLayout.Y_AXIS));
+        JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 3));
         JComboBox<String> zoom = new JComboBox<>(new String[]{"Fit width", "25%", "50%", "75%", "100%", "150%"});
         zoom.addActionListener(e -> {
             String s = (String) zoom.getSelectedItem();
             preview.setZoom(s.startsWith("Fit") ? 0 : Integer.parseInt(s.replace("%", "")) / 100.0);
         });
-        JSpinner sc = dspin(scale, 1, 4, 0.5);
-        sc.addChangeListener(e -> {
-            scale = ((Number) sc.getValue()).doubleValue();
+        scaleSpin = dspin(scale, 1, 4, 0.5);
+        scaleSpin.addChangeListener(e -> {
+            scale = ((Number) scaleSpin.getValue()).doubleValue();
             refresh();
         });
-        JSpinner mw = ispin(maxWidth, 0, 5000, 50);
-        mw.setToolTipText("Maximum screenshot width in pixels (at 1x). Text wraps and images shrink to fit. 0 = unlimited.");
-        mw.addChangeListener(e -> {
-            maxWidth = ival(mw);
+        widthSpin = ispin(maxWidth, 0, 5000, 50);
+        widthSpin.setToolTipText("Maximum screenshot width in pixels (at 1x). Text wraps and images shrink to fit. 0 = unlimited.");
+        widthSpin.addChangeListener(e -> {
+            maxWidth = ival(widthSpin);
             refresh();
         });
-        bar.add(new JLabel("Zoom"));
-        bar.add(zoom);
-        bar.add(new JLabel("Output scale \u00d7"));
-        bar.add(sc);
-        bar.add(new JLabel("Max width (px, 0 = off)"));
-        bar.add(mw);
-        bar.add(btn("Preview window", "Open the preview in its own window (screenshot it with an external tool)", e -> openWindow()));
-        bar.add(btn("Copy image", "Copy the PNG to the clipboard", e -> copy()));
-        bar.add(btn("Save PNG...", "Save as PNG", e -> save()));
-        bar.add(btn("Global settings...", "Default fonts, colours, separator, syntax colours...", e -> openSettings.run()));
-        bar.add(btn("Close capture", "Close this capture", e -> onClose.run()));
+        undoBtn = btn("\u21b6 Undo", "Undo (Ctrl/Cmd+Z)", e -> undo());
+        redoBtn = btn("\u21b7 Redo", "Redo (Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z)", e -> redo());
+        row1.add(undoBtn);
+        row1.add(redoBtn);
+        row1.add(btn("Preview window", "Open the preview in its own window (screenshot it with an external tool)", e -> openWindow()));
+        row1.add(btn("Copy image", "Copy the PNG to the clipboard", e -> copy()));
+        row1.add(btn("Save PNG...", "Save as PNG", e -> save()));
+        row1.add(btn("Global settings...", "Default fonts, colours, separator, syntax colours...", e -> openSettings.run()));
+        row1.add(btn("Close capture", "Close this capture", e -> onClose.run()));
+        row2.add(new JLabel("Zoom"));
+        row2.add(zoom);
+        row2.add(new JLabel("Output scale \u00d7"));
+        row2.add(scaleSpin);
+        row2.add(new JLabel("Max width (px, 0 = off)"));
+        row2.add(widthSpin);
+        row2.add(new JLabel("  Click an annotation in the preview to move / resize it"));
+        bar.add(row1);
+        bar.add(row2);
         JPanel south = new JPanel(new BorderLayout());
         south.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
         south.add(status);
@@ -413,6 +469,127 @@ final class CapturePanel extends JPanel {
         p.add(new JScrollPane(preview), BorderLayout.CENTER);
         p.add(south, BorderLayout.SOUTH);
         return p;
+    }
+
+    // ================================================================== undo / redo
+
+    private Snap snap() {
+        Snap s = new Snap();
+        for (Block b : blocks()) s.blocks.add(b.duplicate());
+        s.scale = scale;
+        s.maxWidth = maxWidth;
+        s.sel = list.getSelectedIndex();
+        s.sig = Store.signature(scale, maxWidth, blocks());
+        return s;
+    }
+
+    /** Pushes the state before the latest batch of edits onto the undo stack (no-op if nothing changed). */
+    private void commitHistory() {
+        histTimer.stop();
+        if (committed == null) {
+            committed = snap();
+            return;
+        }
+        if (Store.signature(scale, maxWidth, blocks()).equals(committed.sig)) return;
+        undo.push(committed);
+        while (undo.size() > 100) undo.removeLast();
+        redo.clear();
+        committed = snap();
+        updateUndoButtons();
+    }
+
+    private void undo() {
+        commitHistory();
+        if (undo.isEmpty()) return;
+        redo.push(committed);
+        committed = undo.pop();
+        applySnap(committed);
+    }
+
+    private void redo() {
+        commitHistory();
+        if (redo.isEmpty()) return;
+        undo.push(committed);
+        committed = redo.pop();
+        applySnap(committed);
+    }
+
+    private void applySnap(Snap s) {
+        histTimer.stop();
+        scale = s.scale;
+        maxWidth = s.maxWidth;
+        scaleSpin.setValue(scale);
+        widthSpin.setValue(maxWidth);
+        model.clear();
+        for (Block b : s.blocks) model.addElement(b.duplicate()); // history entries stay immutable
+        int i = Math.min(s.sel, model.size() - 1);
+        if (i >= 0) list.setSelectedIndex(i);
+        else {
+            cur = null;
+            refresh();
+        }
+        renderNow();
+        updateUndoButtons();
+        onChanged.run();
+    }
+
+    private void updateUndoButtons() {
+        if (undoBtn != null) undoBtn.setEnabled(!undo.isEmpty());
+        if (redoBtn != null) redoBtn.setEnabled(!redo.isEmpty());
+    }
+
+    private void installUndoKeys() {
+        int mask;
+        try {
+            mask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        } catch (java.awt.HeadlessException e) {
+            mask = java.awt.event.InputEvent.CTRL_DOWN_MASK;
+        }
+        javax.swing.InputMap im = getInputMap(WHEN_IN_FOCUSED_WINDOW);
+        javax.swing.ActionMap am = getActionMap();
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_Z, mask), "pt-undo");
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_Z, mask | java.awt.event.InputEvent.SHIFT_DOWN_MASK), "pt-redo");
+        im.put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_Y, mask), "pt-redo");
+        am.put("pt-undo", new javax.swing.AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                undo();
+            }
+        });
+        am.put("pt-redo", new javax.swing.AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                redo();
+            }
+        });
+    }
+
+    // ================================================================== editing in the preview
+
+    private Block ownerOf(Annotation a) {
+        for (Block b : blocks()) if (b.annotations.contains(a)) return b;
+        return null;
+    }
+
+    private void pickAnnotation(Annotation a) {
+        if (a == null) {
+            annList.clearSelection();
+            return;
+        }
+        Block b = ownerOf(a);
+        if (b == null) return;
+        if (b != cur) list.setSelectedValue(b, true);
+        annList.setSelectedValue(a, true);
+        tabs.setSelectedIndex(1);
+    }
+
+    private void deleteAnnotation(Annotation a) {
+        Block b = ownerOf(a);
+        if (b == null) return;
+        commitHistory();
+        b.annotations.remove(a);
+        annModel.removeElement(a);
+        renderNow();
+        commitHistory();
+        onChanged.run();
     }
 
     // ================================================================== helpers
@@ -495,7 +672,7 @@ final class CapturePanel extends JPanel {
                 loadStyle(b);
                 annModel.clear();
                 for (Annotation a : b.annotations) annModel.addElement(a);
-                if (!annModel.isEmpty()) annList.setSelectedIndex(0);
+                annList.clearSelection();
             }
         } finally {
             loading = false;
@@ -762,6 +939,16 @@ final class CapturePanel extends JPanel {
         refresh();
     }
 
+    private void resetAdjust() {
+        Annotation a = annList.getSelectedValue();
+        if (a == null) return;
+        a.offL = a.offT = a.offR = a.offB = 0;
+        a.dx = 0;
+        a.dy = 0;
+        loadAnn();
+        refresh();
+    }
+
     private void reanchor() {
         Annotation a = annList.getSelectedValue();
         if (a == null || needSelection()) return;
@@ -780,6 +967,7 @@ final class CapturePanel extends JPanel {
 
     private void loadAnn() {
         Annotation a = annList.getSelectedValue();
+        preview.setSelected(a);
         boolean was = loading;
         loading = true;
         boolean has = a != null;
@@ -835,12 +1023,14 @@ final class CapturePanel extends JPanel {
 
     void refresh() {
         timer.restart();
+        if (histTimer != null) histTimer.restart();
         onChanged.run();
     }
 
     BufferedImage renderNow() {
-        last = Renderer.render(blocks(), st, scale, maxWidth);
-        preview.setImage(last);
+        Renderer.Result res = Renderer.renderFull(blocks(), st, scale, maxWidth);
+        last = res.image;
+        preview.setResult(res);
         if (winPanel != null) winPanel.setImage(last);
         int lw = (int) Math.round(last.getWidth() / scale), lh = (int) Math.round(last.getHeight() / scale);
         String warn = (lh > 1400) ? "   |   Tall screenshot - lower max lines or drop some headers" : (maxWidth == 0 && lw > 1200) ? "   |   Wide screenshot - set a max width to wrap it" : "";

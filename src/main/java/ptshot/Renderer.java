@@ -90,12 +90,43 @@ final class Renderer {
         }
     }
 
+    /** Where an annotation ended up in the output (device pixels) - used for live editing in the preview. */
+    static final class Geo {
+        final Block block;
+        final Annotation an;
+        final Rectangle rect;   // box / pixelate / blur (after manual adjustment); null for arrows
+        final double[] arrow;   // sx, sy, ex, ey for arrows; null otherwise
+
+        Geo(Block block, Annotation an, Rectangle rect, double[] arrow) {
+            this.block = block;
+            this.an = an;
+            this.rect = rect;
+            this.arrow = arrow;
+        }
+    }
+
+    static final class Result {
+        final BufferedImage image;
+        final List<Geo> geo;
+        final double scale;
+
+        Result(BufferedImage image, List<Geo> geo, double scale) {
+            this.image = image;
+            this.geo = geo;
+            this.scale = scale;
+        }
+    }
+
     static BufferedImage render(List<Block> blocks, Settings st, double S) {
         return render(blocks, st, S, st.maxWidth);
     }
 
     /** @param maxWidth maximum image width in 1x pixels (0 = unlimited); text wraps and images shrink to fit. */
     static BufferedImage render(List<Block> blocks, Settings st, double S, int maxWidth) {
+        return renderFull(blocks, st, S, maxWidth).image;
+    }
+
+    static Result renderFull(List<Block> blocks, Settings st, double S, int maxWidth) {
         BufferedImage scratch = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
         Graphics2D mg = scratch.createGraphics();
         hints(mg);
@@ -139,7 +170,7 @@ final class Renderer {
             g.setColor(st.background);
             g.fillRect(0, 0, 10, 10);
             g.dispose();
-            return e;
+            return new Result(e, new ArrayList<Geo>(), S);
         }
 
         int inner = 0;
@@ -196,35 +227,58 @@ final class Renderer {
         g.dispose();
 
         // ---- annotations: pixelate/blur first (they destroy pixels), then boxes/arrows on top ----
-        List<Object[]> todo = new ArrayList<>(); // {Annotation, Rectangle}
+        List<Geo> geo = new ArrayList<>();
         for (Laid a : all) {
             for (Annotation an : a.b.annotations) {
                 Rectangle r = anchorRect(a, an, S);
-                if (r != null) todo.add(new Object[]{an, r});
+                if (r == null) continue;
+                if (an.type == Annotation.Type.ARROW) geo.add(new Geo(a.b, an, null, arrowPts(an, r, S)));
+                else geo.add(new Geo(a.b, an, boxRect(an, r, S), null));
             }
         }
-        for (Object[] t : todo) {
-            Annotation an = (Annotation) t[0];
-            Rectangle r = inflate((Rectangle) t[1], an.pad * S);
-            if (an.type == Annotation.Type.PIXELATE) pixelate(out, r, Math.max(2, (int) Math.round(an.strength * S)));
-            if (an.type == Annotation.Type.BLUR) blur(out, r, Math.max(1, (int) Math.round(an.strength * S / 2.0)));
+        for (Geo ge : geo) {
+            if (ge.an.type == Annotation.Type.PIXELATE) pixelate(out, ge.rect, Math.max(2, (int) Math.round(ge.an.strength * S)));
+            if (ge.an.type == Annotation.Type.BLUR) blur(out, ge.rect, Math.max(1, (int) Math.round(ge.an.strength * S / 2.0)));
         }
         Graphics2D g2 = out.createGraphics();
         hints(g2);
-        for (Object[] t : todo) {
-            Annotation an = (Annotation) t[0];
-            Rectangle r = (Rectangle) t[1];
+        for (Geo ge : geo) {
+            Annotation an = ge.an;
             if (an.type == Annotation.Type.BOX) {
-                Rectangle b = inflate(r, an.pad * S);
+                Rectangle b = ge.rect;
                 g2.setColor(an.color);
                 g2.setStroke(new BasicStroke((float) (an.width * S), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
                 g2.drawRect(b.x, b.y, b.width, b.height);
             } else if (an.type == Annotation.Type.ARROW) {
-                arrow(g2, an, r, S);
+                arrow(g2, an, ge.arrow, S);
             }
         }
         g2.dispose();
-        return out;
+        return new Result(out, geo, S);
+    }
+
+    /** Anchor rectangle + padding + the user's manual edge adjustments (1x pixels, set by dragging in the preview). */
+    private static Rectangle boxRect(Annotation an, Rectangle anchor, double S) {
+        Rectangle r = inflate(anchor, an.pad * S);
+        int l = (int) Math.round(an.offL * S), t = (int) Math.round(an.offT * S);
+        int rr = (int) Math.round(an.offR * S), b = (int) Math.round(an.offB * S);
+        return new Rectangle(r.x + l, r.y + t, Math.max(2, r.width - l + rr), Math.max(2, r.height - t + b));
+    }
+
+    /** {startX, startY, endX, endY} of an arrow in device pixels. */
+    private static double[] arrowPts(Annotation an, Rectangle r, double S) {
+        double pad = an.pad * S, sx, sy;
+        switch (an.edge) {
+            case TOP: sx = r.getCenterX(); sy = r.y - pad; break;
+            case LEFT: sx = r.x - pad; sy = r.getCenterY(); break;
+            case RIGHT: sx = r.getMaxX() + pad; sy = r.getCenterY(); break;
+            case CENTER: sx = r.getCenterX(); sy = r.getCenterY(); break;
+            default: sx = r.getCenterX(); sy = r.getMaxY() + pad;
+        }
+        sx += an.dx * S;
+        sy += an.dy * S;
+        double rad = Math.toRadians(an.angle), len = an.length * S;
+        return new double[]{sx, sy, sx + len * Math.cos(rad), sy + len * Math.sin(rad)};
     }
 
     // ------------------------------------------------------------------ measuring
@@ -465,17 +519,8 @@ final class Renderer {
         return r;
     }
 
-    private static void arrow(Graphics2D g, Annotation an, Rectangle r, double S) {
-        double pad = an.pad * S, sx, sy;
-        switch (an.edge) {
-            case TOP: sx = r.getCenterX(); sy = r.y - pad; break;
-            case LEFT: sx = r.x - pad; sy = r.getCenterY(); break;
-            case RIGHT: sx = r.getMaxX() + pad; sy = r.getCenterY(); break;
-            case CENTER: sx = r.getCenterX(); sy = r.getCenterY(); break;
-            default: sx = r.getCenterX(); sy = r.getMaxY() + pad;
-        }
-        sx += an.dx * S;
-        sy += an.dy * S;
+    private static void arrow(Graphics2D g, Annotation an, double[] pts, double S) {
+        double sx = pts[0], sy = pts[1];
         double len = an.length * S, head = Math.min(an.headSize * S, len), hw = an.headSize * S * 1.3;
         double neck = Math.max(0, len - head);
         AffineTransform old = g.getTransform();
