@@ -120,6 +120,12 @@ final class CapturePanel extends JPanel {
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buildLeft(), buildRight());
         split.setDividerLocation(540);
         split.setResizeWeight(0.0);
+        split.setContinuousLayout(true);
+        split.setOneTouchExpandable(true);
+        split.setDividerSize(9);
+        // the panels' natural minimum sizes are wide; without this the divider can't be dragged
+        split.getLeftComponent().setMinimumSize(new Dimension(150, 100));
+        split.getRightComponent().setMinimumSize(new Dimension(150, 100));
         add(split, BorderLayout.CENTER);
         timer = new javax.swing.Timer(120, e -> renderNow());
         timer.setRepeats(false);
@@ -892,18 +898,36 @@ final class CapturePanel extends JPanel {
     }
 
     private void renderHtmlAction() {
-        if (cur == null || cur.kind == Block.Kind.IMAGE) return;
-        String sel = ta.getSelectedText();
-        String html = (sel != null && !sel.trim().isEmpty()) ? sel : (cur.isHttp() ? cur.bodyText() : ta.getText());
+        String html = "";
+        if (cur != null && cur.kind != Block.Kind.IMAGE) {
+            String sel = ta.getSelectedText();
+            html = (sel != null && !sel.trim().isEmpty()) ? sel : (cur.isHttp() ? cur.bodyText() : ta.getText());
+        }
         if (!html.contains("<")) {
-            status.setText("No HTML found - select HTML code in the text box, or pick a response with an HTML body.");
-            return;
+            // nothing usable selected: let the user paste / type any HTML to render
+            html = promptHtml(html);
+            if (html == null) return;
+            if (html.trim().isEmpty()) {
+                status.setText("No HTML entered.");
+                return;
+            }
         }
         final String src = html;
         BufferedImage first = Html.render(src, 700, 2.0);
         BufferedImage out = ImagePicker.show(SwingUtilities.getWindowAncestor(this),
                 "Rendered HTML - drag to select the part to include", first, w -> Html.render(src, w, 2.0), 700);
         if (out != null) insertImage(out, 2.0);
+    }
+
+    /** Asks for HTML source to render; returns null if cancelled. */
+    private String promptHtml(String initial) {
+        JTextArea area = new JTextArea(initial, 16, 70);
+        area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JPanel p = new JPanel(new BorderLayout(0, 4));
+        p.add(new JLabel("Paste or type any HTML to render (none was selected / found in the current block):"), BorderLayout.NORTH);
+        p.add(new JScrollPane(area), BorderLayout.CENTER);
+        int r = JOptionPane.showConfirmDialog(SwingUtilities.getWindowAncestor(this), p, "Render HTML", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        return r == JOptionPane.OK_OPTION ? area.getText() : null;
     }
 
     private void screenAction() {
