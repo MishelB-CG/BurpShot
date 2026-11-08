@@ -84,7 +84,8 @@ final class CapturePanel extends JPanel {
     private javax.swing.Timer histTimer;
 
     // content tab
-    private JCheckBox incFirst, incHeaders, incBody, pretty;
+    private JCheckBox incFirst, incHeaders, incBody;
+    private javax.swing.JToggleButton viewPretty, viewRaw;
     private Checklist hdrList, parList;
     private JSpinner maxBody;
     private JTextArea ta;
@@ -211,13 +212,25 @@ final class CapturePanel extends JPanel {
         incFirst = new JCheckBox("First line", true);
         incHeaders = new JCheckBox("Headers", true);
         incBody = new JCheckBox("Body", true);
-        pretty = new JCheckBox("Pretty-print JSON", false);
-        for (JCheckBox c : new JCheckBox[]{incFirst, incHeaders, incBody, pretty}) c.addActionListener(e -> filtersChanged());
+        viewPretty = new javax.swing.JToggleButton("Pretty", true);
+        viewRaw = new javax.swing.JToggleButton("Raw");
+        javax.swing.ButtonGroup vg = new javax.swing.ButtonGroup();
+        for (javax.swing.JToggleButton t : new javax.swing.JToggleButton[]{viewPretty, viewRaw}) {
+            vg.add(t);
+            t.setFocusable(false);
+            t.setMargin(new java.awt.Insets(2, 10, 2, 10));
+            t.addActionListener(e -> filtersChanged());
+        }
+        viewPretty.setToolTipText("Re-indent JSON / XML / HTML bodies (like Burp's Pretty view)");
+        viewRaw.setToolTipText("Show the body exactly as captured");
+        for (JCheckBox c : new JCheckBox[]{incFirst, incHeaders, incBody}) c.addActionListener(e -> filtersChanged());
         JPanel r1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         r1.add(incFirst);
         r1.add(incHeaders);
         r1.add(incBody);
-        r1.add(pretty);
+        r1.add(new JLabel("  View:"));
+        r1.add(viewPretty);
+        r1.add(viewRaw);
         hdrList = new Checklist("Headers (untick to hide)");
         parList = new Checklist("Form parameters (untick to hide)");
         JPanel r2 = new JPanel(new GridLayout(1, 2, 4, 0));
@@ -229,7 +242,7 @@ final class CapturePanel extends JPanel {
         r3.add(new JLabel("Max body chars (0 = all)"));
         r3.add(maxBody);
         r3.add(btn("Rebuild text from original", "Discard manual edits and rebuild from the captured message", e -> filtersChanged()));
-        JLabel hint = new JLabel("<html><body style='width:470px'><i>Select text in the box below, then use the buttons. Changing a filter rebuilds the text (manual edits are lost).</i></body></html>");
+        JLabel hint = new JLabel("<html><body style='width:470px'><i>Select text in the box below, then use the buttons. Changing a filter or the Pretty/Raw view rebuilds the text (manual edits are lost).</i></body></html>");
         filterPanel.add(r1);
         filterPanel.add(r2);
         filterPanel.add(r3);
@@ -661,7 +674,7 @@ final class CapturePanel extends JPanel {
                 incFirst.setSelected(b.incFirst);
                 incHeaders.setSelected(b.incHeaders);
                 incBody.setSelected(b.incBody);
-                pretty.setSelected(b.prettyJson);
+                (b.pretty ? viewPretty : viewRaw).setSelected(true);
                 maxBody.setValue(b.maxBodyChars);
                 if (http) {
                     List<String> hl = b.headLines();
@@ -734,7 +747,7 @@ final class CapturePanel extends JPanel {
         cur.incFirst = incFirst.isSelected();
         cur.incHeaders = incHeaders.isSelected();
         cur.incBody = incBody.isSelected();
-        cur.prettyJson = pretty.isSelected();
+        cur.pretty = viewPretty.isSelected();
         cur.maxBodyChars = ival(maxBody);
         cur.regenerate();
         loading = true;

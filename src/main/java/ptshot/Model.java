@@ -70,7 +70,7 @@ final class Block {
     BufferedImage image;
     int imageMaxWidth = 500;
     // filters (REQUEST / RESPONSE only)
-    boolean incFirst = true, incHeaders = true, incBody = true, prettyJson;
+    boolean incFirst = true, incHeaders = true, incBody = true, pretty;
     int maxBodyChars;
     final Set<Integer> hiddenHeaders = new HashSet<>();
     final Set<Integer> hiddenParams = new HashSet<>();
@@ -88,6 +88,7 @@ final class Block {
         b.kind = k;
         b.label = k == Kind.REQUEST ? "Request" : "Response";
         b.original = raw;
+        b.pretty = true; // Burp's message editor defaults to the Pretty view
         b.wrapCols = st.wrapCols;
         b.maxLines = st.maxLines;
         b.wrap = st.wrap;
@@ -127,7 +128,7 @@ final class Block {
         b.bodyFont = bodyFont == null ? null : bodyFont.copy();
         b.background = background; b.highlight = highlight; b.align = align;
         b.original = original; b.text = text; b.image = image; b.imageMaxWidth = imageMaxWidth;
-        b.incFirst = incFirst; b.incHeaders = incHeaders; b.incBody = incBody; b.prettyJson = prettyJson;
+        b.incFirst = incFirst; b.incHeaders = incHeaders; b.incBody = incBody; b.pretty = pretty;
         b.maxBodyChars = maxBodyChars; b.hiddenHeaders.addAll(hiddenHeaders); b.hiddenParams.addAll(hiddenParams);
         b.wrapCols = wrapCols; b.maxLines = maxLines; b.wrap = wrap;
         b.beside = beside; b.separatorAfter = separatorAfter; b.sepColor = sepColor; b.sepWidth = sepWidth;
@@ -172,6 +173,17 @@ final class Block {
         return l;
     }
 
+    /** Value of the first header with this (case-insensitive) name, or "". */
+    String headerValue(String name) {
+        List<String> hl = headLines();
+        for (int i = 1; i < hl.size(); i++) {
+            String h = hl.get(i);
+            int c = h.indexOf(':');
+            if (c > 0 && h.substring(0, c).trim().equalsIgnoreCase(name)) return h.substring(c + 1).trim();
+        }
+        return "";
+    }
+
     static boolean looksForm(String body) {
         return !body.isEmpty() && body.indexOf('\n') < 0 && body.matches("^[^\\s=&{}<>\\[\\]\"]+=.*");
     }
@@ -205,8 +217,8 @@ final class Block {
                 List<String> keep = new ArrayList<>();
                 for (int i = 0; i < params.size(); i++) if (!hiddenParams.contains(i)) keep.add(params.get(i));
                 body = String.join("&", keep);
-            } else if (prettyJson && looksJson(body)) {
-                body = Json.pretty(body);
+            } else if (pretty) {
+                body = Pretty.format(body, headerValue("content-type"));
             }
             if (maxBodyChars > 0 && body.length() > maxBodyChars) body = body.substring(0, maxBodyChars) + "\n...";
             if (sb.length() > 0) sb.append('\n');

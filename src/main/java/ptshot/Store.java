@@ -74,7 +74,7 @@ final class Store {
         m.put("incFirst", b.incFirst);
         m.put("incHeaders", b.incHeaders);
         m.put("incBody", b.incBody);
-        m.put("prettyJson", b.prettyJson);
+        m.put("prettyJson", b.pretty);
         m.put("maxBodyChars", b.maxBodyChars);
         m.put("hiddenHeaders", new ArrayList<Object>(b.hiddenHeaders));
         m.put("hiddenParams", new ArrayList<Object>(b.hiddenParams));
@@ -171,7 +171,7 @@ final class Store {
         b.incFirst = bool(m, "incFirst", true);
         b.incHeaders = bool(m, "incHeaders", true);
         b.incBody = bool(m, "incBody", true);
-        b.prettyJson = bool(m, "prettyJson", false);
+        b.pretty = bool(m, "prettyJson", false);
         b.maxBodyChars = (int) num(m, "maxBodyChars", 0);
         for (Object o : (List<Object>) m.getOrDefault("hiddenHeaders", new ArrayList<>())) b.hiddenHeaders.add(((Number) o).intValue());
         for (Object o : (List<Object>) m.getOrDefault("hiddenParams", new ArrayList<>())) b.hiddenParams.add(((Number) o).intValue());

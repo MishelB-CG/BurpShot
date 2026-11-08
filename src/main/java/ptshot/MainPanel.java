@@ -70,20 +70,69 @@ final class MainPanel extends JPanel {
         help.setVerticalAlignment(JLabel.TOP);
         tabs.addTab("Welcome", new JScrollPane(help));
         add(tabs, BorderLayout.CENTER);
-        tabs.addMouseListener(new MouseAdapter() {
+        restore();
+    }
+
+    private void renameTab(Component c) {
+        int i = tabs.indexOfComponent(c);
+        if (i < 0) return;
+        Object n = JOptionPane.showInputDialog(this, "Tab name:", tabs.getTitleAt(i));
+        if (n != null && !n.toString().trim().isEmpty()) {
+            String t = n.toString().trim();
+            tabs.setTitleAt(i, t);
+            Component h = tabs.getTabComponentAt(i);
+            if (h instanceof JPanel && ((JPanel) h).getComponent(0) instanceof JLabel) ((JLabel) ((JPanel) h).getComponent(0)).setText(t);
+            saveSoon();
+        }
+    }
+
+    private void closeTab(CapturePanel cp) {
+        cp.disposeWindows();
+        tabs.remove(cp);
+        saveSoon();
+    }
+
+    /** Tab header: title (double-click to rename, middle-click to close) plus a close button. */
+    private JPanel tabHeader(String title, CapturePanel cp) {
+        JPanel h = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        h.setOpaque(false);
+        JLabel l = new JLabel(title);
+        JButton x = new JButton("×");
+        x.setToolTipText("Close this capture");
+        x.setFocusable(false);
+        x.setMargin(new java.awt.Insets(0, 4, 0, 4));
+        x.setBorderPainted(false);
+        x.setContentAreaFilled(false);
+        x.setFont(x.getFont().deriveFont(java.awt.Font.BOLD, 15f));
+        x.addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseClicked(MouseEvent e) {
-                int i = tabs.indexAtLocation(e.getX(), e.getY());
-                if (e.getClickCount() == 2 && i > 0) {
-                    Object n = JOptionPane.showInputDialog(MainPanel.this, "Tab name:", tabs.getTitleAt(i));
-                    if (n != null && !n.toString().trim().isEmpty()) {
-                        tabs.setTitleAt(i, n.toString().trim());
-                        saveSoon();
-                    }
-                }
+            public void mouseEntered(MouseEvent e) {
+                x.setForeground(java.awt.Color.RED);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                x.setForeground(null);
             }
         });
-        restore();
+        x.addActionListener(e -> closeTab(cp));
+        MouseAdapter ma = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isMiddleMouseButton(e)) closeTab(cp);
+                else tabs.setSelectedComponent(cp);
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) renameTab(cp);
+            }
+        };
+        l.addMouseListener(ma);
+        h.addMouseListener(ma);
+        h.add(l);
+        h.add(x);
+        return h;
     }
 
     private void restore() {
@@ -138,13 +187,10 @@ final class MainPanel extends JPanel {
 
     private void addTab(String title, double scale, int maxWidth, List<Block> blocks, boolean select) {
         final CapturePanel[] holder = new CapturePanel[1];
-        holder[0] = new CapturePanel(st, blocks, scale, maxWidth, () -> {
-            holder[0].disposeWindows();
-            tabs.remove(holder[0]);
-            saveSoon();
-        }, this::openSettings, this::saveSoon);
+        holder[0] = new CapturePanel(st, blocks, scale, maxWidth, () -> closeTab(holder[0]), this::openSettings, this::saveSoon);
         themer.accept(holder[0]);
         tabs.addTab(title, holder[0]);
+        tabs.setTabComponentAt(tabs.indexOfComponent(holder[0]), tabHeader(title, holder[0]));
         if (select) tabs.setSelectedComponent(holder[0]);
         saveSoon();
     }
