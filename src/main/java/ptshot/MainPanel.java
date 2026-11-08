@@ -59,7 +59,7 @@ final class MainPanel extends JPanel {
         javax.swing.JEditorPane help = new javax.swing.JEditorPane("text/html", "<html><body>"
                 + "<h2>BurpShot</h2>"
                 + "<p>Right-click a request (or several) anywhere in Burp and choose <b>Extensions &rarr; BurpShot &rarr; Send to BurpShot</b>. "
-                + "Each one opens as its own tab here.</p>"
+                + "Or select it and press <b>Ctrl+Alt+B</b> (rebindable in Burp's hotkey settings). Each one opens as its own tab here.</p>"
                 + "<ol>"
                 + "<li><b>Content tab</b> - choose what is shown: <i>Pretty / Raw</i> body (JSON / XML / HTML re-indented), <i>Filters</i> for first line, headers, form parameters and body length, or edit the text freely. "
                 + "<b>Select text and right-click</b> for Box / Arrow / Pixelate / Blur on that text (they stay attached to it) and for edit actions like <i>Keep selection, ... the rest of the line</i>. <b>Ctrl+F</b> searches the editor (all layers: request and response).</li>"

@@ -49,6 +49,8 @@ After loading, a **BurpShot** tab appears in Burp's top tab bar and a *Send to B
 1. In Proxy, Repeater, Logger, Target... right-click one or more requests -> **Extensions -> BurpShot -> Send to BurpShot**.
    Each request (with its response) opens as its own capture tab.
 
+   **Shortcut:** select the request(s) in a table (Proxy history, Intruder results, Organizer, site map) or click into a message editor and press **Ctrl+Alt+B**. (Ctrl+B is Burp's own *Base64-encode selection*, so it is not used.) The shortcut can be changed or removed in Burp under *Settings -> User interface -> Hotkeys*; look for *BurpShot: Send to BurpShot*.
+
    ![Send to BurpShot context menu](docs/images/02-context-menu.png)
 
 2. Open the **BurpShot** tab. The right side is the live preview, the left side is where you choose *what* is shown.
@@ -601,6 +603,7 @@ Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply i
 |---|---|---|
 | Ctrl/Cmd+F | Capture | Focus the Find bar of the Content tab |
 | Enter / Shift+Enter | Find bar | Next / previous match |
+| Ctrl+Alt+B | Burp (message editors, Proxy history, Intruder results, Organizer, site map) | Send the selected request(s) to BurpShot; rebindable in Burp's hotkey settings |
 | Ctrl/Cmd+Z | Capture | Undo |
 | Ctrl/Cmd+Y, Ctrl/Cmd+Shift+Z | Capture | Redo |
 | Arrow keys (Shift = 10 px) | Preview | Nudge the selected element or layer |

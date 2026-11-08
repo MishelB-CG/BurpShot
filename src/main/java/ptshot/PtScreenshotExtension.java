@@ -8,6 +8,9 @@ import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent;
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
+import burp.api.montoya.ui.hotkey.HotKey;
+import burp.api.montoya.ui.hotkey.HotKeyContext;
+import burp.api.montoya.ui.hotkey.HotKeyHandler;
 import burp.api.montoya.utilities.CompressionType;
 import java.awt.Component;
 import java.awt.Font;
@@ -20,6 +23,9 @@ import javax.swing.SwingUtilities;
 
 public class PtScreenshotExtension implements BurpExtension {
     private static final int MAX_CHARS = 200_000;
+    /** Default shortcut for "Send to BurpShot". Ctrl+B is Burp's own Base64-encode, so this one is used; it can be changed in Burp's hotkey settings. */
+    static final String HOTKEY = "Ctrl+Alt+B";
+    private static final String HOTKEY_NAME = "BurpShot: Send to BurpShot";
 
     private MontoyaApi api;
     private MainPanel panel;
@@ -88,13 +94,34 @@ public class PtScreenshotExtension implements BurpExtension {
             }
         });
 
+        // keyboard shortcut: works wherever Burp offers hotkeys (message editors, Proxy history, Intruder results, Organizer, site map)
+        HotKeyHandler hotKeyHandler = event -> {
+            List<HttpRequestResponse> items = new ArrayList<>();
+            event.messageEditorRequestResponse().ifPresent(m -> items.add(m.requestResponse()));
+            if (items.isEmpty()) items.addAll(event.selectedRequestResponses());
+            if (items.isEmpty()) return;
+            SwingUtilities.invokeLater(() -> {
+                for (HttpRequestResponse rr : items) send(rr);
+            });
+        };
+        int registered = 0;
+        for (HotKeyContext ctx : HotKeyContext.values()) {
+            try {
+                api.userInterface().registerHotKeyHandler(ctx, HotKey.hotKey(HOTKEY_NAME, HOTKEY), hotKeyHandler);
+                registered++;
+            } catch (Throwable t) {
+                api.logging().logToError("BurpShot: could not register the " + HOTKEY + " shortcut in " + ctx + ": " + t);
+            }
+        }
+
         api.extension().registerUnloadingHandler(() -> {
             if (panel != null) {
                 panel.saveNow();
                 panel.disposeWindows();
             }
         });
-        api.logging().logToOutput("BurpShot loaded. Right-click a request -> Extensions -> BurpShot.");
+        api.logging().logToOutput("BurpShot loaded. Right-click a request -> Extensions -> BurpShot, or press " + HOTKEY
+                + " (" + registered + " hotkey contexts registered; change it in Settings -> User interface -> Hotkeys).");
     }
 
     private void send(HttpRequestResponse rr) {
