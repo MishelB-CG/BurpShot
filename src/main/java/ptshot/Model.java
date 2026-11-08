@@ -69,6 +69,10 @@ final class Block {
     String text = "";
     BufferedImage image;
     int imageMaxWidth = 500;
+    // manual layer placement (1x px), set by dragging / resizing in the preview; 0 = automatic
+    double offX, offY;    // moved away from where the flow layout put it
+    double boxW;          // text blocks: fixed box width (wrap width)
+    double imageW;        // image blocks: fixed display width (may enlarge)
     // filters (REQUEST / RESPONSE only)
     boolean incFirst = true, incHeaders = true, incBody = true, pretty;
     int maxBodyChars;
@@ -128,6 +132,7 @@ final class Block {
         b.bodyFont = bodyFont == null ? null : bodyFont.copy();
         b.background = background; b.highlight = highlight; b.align = align;
         b.original = original; b.text = text; b.image = image; b.imageMaxWidth = imageMaxWidth;
+        b.offX = offX; b.offY = offY; b.boxW = boxW; b.imageW = imageW;
         b.incFirst = incFirst; b.incHeaders = incHeaders; b.incBody = incBody; b.pretty = pretty;
         b.maxBodyChars = maxBodyChars; b.hiddenHeaders.addAll(hiddenHeaders); b.hiddenParams.addAll(hiddenParams);
         b.wrapCols = wrapCols; b.maxLines = maxLines; b.wrap = wrap;

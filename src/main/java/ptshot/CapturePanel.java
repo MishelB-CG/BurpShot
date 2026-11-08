@@ -85,7 +85,8 @@ final class CapturePanel extends JPanel {
 
     // content tab
     private JCheckBox incFirst, incHeaders, incBody;
-    private javax.swing.JToggleButton viewPretty, viewRaw;
+    private javax.swing.JToggleButton viewPretty, viewRaw, filtersBtn;
+    private JLabel filterSummary;
     private Checklist hdrList, parList;
     private JSpinner maxBody;
     private JTextArea ta;
@@ -117,8 +118,11 @@ final class CapturePanel extends JPanel {
         this.onChanged = onChanged;
         for (Block b : init) model.addElement(b);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buildLeft(), buildRight());
-        split.setDividerLocation(540);
+        JPanel leftPane = buildLeft();
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPane, buildRight());
+        // wide enough for the widest button row (so no button is clipped), but never more than ~60% of the screen
+        int screenW = Toolkit.getDefaultToolkit().getScreenSize().width;
+        split.setDividerLocation(Math.max(540, Math.min(leftPane.getPreferredSize().width + 14, (int) (screenW * 0.6))));
         split.setResizeWeight(0.0);
         split.setContinuousLayout(true);
         split.setOneTouchExpandable(true);
@@ -154,6 +158,10 @@ final class CapturePanel extends JPanel {
 
             public void delete(Annotation a) {
                 deleteAnnotation(a);
+            }
+
+            public void pickedBlock(Block b) {
+                if (b != cur) list.setSelectedValue(b, true);
             }
         });
         installUndoKeys();
@@ -224,35 +232,60 @@ final class CapturePanel extends JPanel {
         for (javax.swing.JToggleButton t : new javax.swing.JToggleButton[]{viewPretty, viewRaw}) {
             vg.add(t);
             t.setFocusable(false);
-            t.setMargin(new java.awt.Insets(2, 10, 2, 10));
+            t.setMargin(new java.awt.Insets(5, 14, 5, 14));
             t.addActionListener(e -> filtersChanged());
         }
         viewPretty.setToolTipText("Re-indent JSON / XML / HTML bodies (like Burp's Pretty view)");
         viewRaw.setToolTipText("Show the body exactly as captured");
         for (JCheckBox c : new JCheckBox[]{incFirst, incHeaders, incBody}) c.addActionListener(e -> filtersChanged());
-        JPanel r1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        r1.add(incFirst);
-        r1.add(incHeaders);
-        r1.add(incBody);
-        r1.add(new JLabel("  View:"));
-        r1.add(viewPretty);
-        r1.add(viewRaw);
-        hdrList = new Checklist("Headers (untick to hide)");
-        parList = new Checklist("Form parameters (untick to hide)");
-        JPanel r2 = new JPanel(new GridLayout(1, 2, 4, 0));
-        r2.add(hdrList);
-        r2.add(parList);
+        hdrList = new Checklist("Headers");
+        parList = new Checklist("Form parameters");
         maxBody = ispin(0, 0, 1_000_000, 100);
         maxBody.addChangeListener(e -> filtersChanged());
-        JPanel r3 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-        r3.add(new JLabel("Max body chars (0 = all)"));
-        r3.add(maxBody);
-        r3.add(btn("Rebuild text from original", "Discard manual edits and rebuild from the captured message", e -> filtersChanged()));
-        JLabel hint = new JLabel("<html><body style='width:470px'><i>Select text in the box below, then use the buttons. Changing a filter or the Pretty/Raw view rebuilds the text (manual edits are lost).</i></body></html>");
-        filterPanel.add(r1);
-        filterPanel.add(r2);
-        filterPanel.add(r3);
-        filterPanel.add(hint);
+
+        // always visible: one slim row  [Pretty|Raw]  [> Filters]  summary
+        JPanel bar = new JPanel(new BorderLayout(6, 0));
+        JPanel barL = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        JPanel seg = new JPanel(new GridLayout(1, 2, 0, 0));
+        seg.add(viewPretty);
+        seg.add(viewRaw);
+        barL.add(seg);
+        filtersBtn = new javax.swing.JToggleButton("Filters ▸");
+        filtersBtn.setFocusable(false);
+        filtersBtn.setMargin(new java.awt.Insets(5, 12, 5, 12));
+        filtersBtn.setToolTipText("Choose which parts of the message are shown. Changing a filter or Pretty/Raw rebuilds the text (manual edits are lost).");
+        barL.add(filtersBtn);
+        filterSummary = new JLabel(" ");
+        filterSummary.setFont(filterSummary.getFont().deriveFont(Font.ITALIC));
+        filterSummary.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 4));
+        bar.add(barL, BorderLayout.WEST);
+        bar.add(filterSummary, BorderLayout.CENTER);
+
+        // collapsed by default
+        JPanel details = new JPanel();
+        details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+        details.setVisible(false);
+        JPanel inc = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        inc.add(new JLabel("Include:"));
+        inc.add(incFirst);
+        inc.add(incHeaders);
+        inc.add(incBody);
+        inc.add(new JLabel("  Body limit"));
+        maxBody.setToolTipText("Cut the body after this many characters (0 = all)");
+        inc.add(maxBody);
+        inc.add(btn("Reset text", "Discard manual edits and rebuild the text from the captured message", e -> filtersChanged()));
+        JPanel lists = new JPanel(new GridLayout(1, 2, 4, 0));
+        lists.add(hdrList);
+        lists.add(parList);
+        details.add(inc);
+        details.add(lists);
+        filtersBtn.addActionListener(e -> {
+            details.setVisible(filtersBtn.isSelected());
+            filtersBtn.setText(filtersBtn.isSelected() ? "Filters ▾" : "Filters ▸");
+            filterPanel.revalidate();
+        });
+        filterPanel.add(bar);
+        filterPanel.add(details);
 
         ta = new JTextArea();
         ta.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -288,31 +321,23 @@ final class CapturePanel extends JPanel {
             }
         });
 
-        JPanel ops = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
-        ops.add(new JLabel("Part of a value:"));
-        ops.add(btn("Selection \u2192 ...", "Replace the selected text with ...", e -> replaceSel()));
-        ops.add(btn("Ellipsize outside", "Keep the header name and the selection, replace the rest of the line with ...", e -> ellipsizeOutside()));
-        JPanel ops2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
-        ops2.add(new JLabel("Whole lines:"));
-        ops2.add(btn("Delete", "Delete the selected line(s)", e -> lineOp(0)));
-        ops2.add(btn("Collapse to ...", "Replace the selected line(s) with a single ... line", e -> lineOp(1)));
-        ops2.add(btn("Keep only these", "Keep only the selected line(s), collapse the rest into ...", e -> lineOp(2)));
-        JPanel adds = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
-        adds.add(new JLabel("Annotate selection:"));
-        adds.add(btn("Box", "Red rectangle around the selected text", e -> addAnn(Annotation.Type.BOX)));
-        adds.add(btn("Arrow", "Arrow starting at the selected text", e -> addAnn(Annotation.Type.ARROW)));
-        adds.add(btn("Pixelate", "Pixelate the selected text", e -> addAnn(Annotation.Type.PIXELATE)));
-        adds.add(btn("Blur", "Blur the selected text", e -> addAnn(Annotation.Type.BLUR)));
-        JPanel html = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 1));
-        html.add(new JLabel("Rendered HTML:"));
-        html.add(btn("Render selection / body...", "Render the selected HTML code (or the whole response body) and pick a region to add as an image block", e -> renderHtmlAction()));
-        html.add(btn("Capture screen region...", "Grab the screen after a delay (e.g. Burp's Render tab) and pick a region to add as an image block", e -> screenAction()));
-        JPanel south = new JPanel();
-        south.setLayout(new BoxLayout(south, BoxLayout.Y_AXIS));
-        south.add(html);
-        south.add(ops);
-        south.add(ops2);
-        south.add(adds);
+        // one slim toolbar, acting on the text selected in the box above:  [annotate icons] | Edit text v | Add image v
+        JPanel south = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 2));
+        south.add(new JLabel("Select text, then:"));
+        south.add(iconBtn(Icons.box(), "Box - red rectangle around the selected text", e -> addAnn(Annotation.Type.BOX)));
+        south.add(iconBtn(Icons.arrow(), "Arrow - starts at the selected text", e -> addAnn(Annotation.Type.ARROW)));
+        south.add(iconBtn(Icons.pixelate(), "Pixelate the selected text", e -> addAnn(Annotation.Type.PIXELATE)));
+        south.add(iconBtn(Icons.blur(), "Blur the selected text", e -> addAnn(Annotation.Type.BLUR)));
+        south.add(menuBtn("Edit text", Icons.lines(), "Shorten or remove parts of the text",
+                item("Replace selection with ...", "Replace the selected text with ...", e -> replaceSel()),
+                item("Keep selection, ... the rest of the line", "Keep the header name and the selection, replace the rest of the line with ...", e -> ellipsizeOutside()),
+                null,
+                item("Delete line(s)", "Delete the selected line(s)", e -> lineOp(0)),
+                item("Collapse line(s) to ...", "Replace the selected line(s) with a single ... line", e -> lineOp(1)),
+                item("Keep only selected line(s)", "Keep only the selected line(s), collapse the rest into ...", e -> lineOp(2))));
+        south.add(menuBtn("Render", Icons.picture(), "Add a rendered HTML page or a screen capture as an image block",
+                item("Render HTML (selection / body / pasted)...", "Render HTML code and pick a region to add as an image block", e -> renderHtmlAction()),
+                item("Capture screen region...", "Grab the screen after a delay (e.g. Burp's Render tab) and pick a region", e -> screenAction())));
 
         p.add(filterPanel, BorderLayout.NORTH);
         p.add(new JScrollPane(ta), BorderLayout.CENTER);
@@ -417,25 +442,26 @@ final class CapturePanel extends JPanel {
             }
         });
         Form f = new Form();
-        f.span(new JLabel("<html><b>Label</b> (the red \"Request\" / \"Response\" header)</html>"));
+        f.span(Txt.heading("Label", "(the red \"Request\" / \"Response\" header)"));
         f.row("", showLabel);
         f.row("Text", labelField);
         f.row("Alignment (label / block)", align);
         f.span(labelFont);
-        f.span(new JLabel("<html><b>Body</b></html>"));
+        f.span(Txt.heading("Body", null));
         f.span(bodyFont);
         f.span(highlight);
         f.span(bgOpt);
-        f.span(new JLabel("<html><b>Fit</b> (also see \"Max width\" in the preview toolbar)</html>"));
+        f.span(Txt.heading("Fit", "(also see \"Max width\" in the preview toolbar)"));
         f.row("Wrap at columns (0 = off)", wrapCols);
         f.span(wrap);
         f.row("Max lines (0 = all)", maxLines);
         f.row("Image max width (px)", imgMax);
-        f.span(new JLabel("<html><b>Layout</b></html>"));
+        f.span(Txt.heading("Layout", null));
         f.span(beside);
         f.span(sepAfter);
         f.span(sepOpt);
         f.row("Custom separator width (0 = global)", sepWidth);
+        f.span(btn("Reset layer position and size", "Undo drag-moves and resizes of this layer made in the preview (it returns to its automatic place and size)", e -> resetLayer()));
         return new JPanel(new BorderLayout()) {{
             add(new JScrollPane(f.top()));
         }};
@@ -478,7 +504,7 @@ final class CapturePanel extends JPanel {
         row2.add(scaleSpin);
         row2.add(new JLabel("Max width (px, 0 = off)"));
         row2.add(widthSpin);
-        row2.add(new JLabel("  Click an annotation in the preview to move / resize it"));
+        row2.add(new JLabel("  Click an annotation or a whole block in the preview to move / resize it"));
         bar.add(row1);
         bar.add(row2);
         JPanel south = new JPanel(new BorderLayout());
@@ -613,6 +639,54 @@ final class CapturePanel extends JPanel {
 
     // ================================================================== helpers
 
+    private static JButton iconBtn(javax.swing.Icon icon, String tip, java.awt.event.ActionListener l) {
+        JButton b = new JButton(icon);
+        b.setToolTipText(tip);
+        b.setMargin(new java.awt.Insets(6, 10, 6, 10));
+        b.setFocusable(false);
+        b.addActionListener(l);
+        return b;
+    }
+
+    private static JMenuItem item(String text, String tip, java.awt.event.ActionListener l) {
+        JMenuItem m = new JMenuItem(text);
+        m.setToolTipText(tip);
+        m.addActionListener(l);
+        return m;
+    }
+
+    /** A button that pops up a menu; a null entry is a separator. */
+    private static JButton menuBtn(String text, javax.swing.Icon icon, String tip, JMenuItem... items) {
+        JButton b = new JButton(text + " ▾", icon);
+        b.setToolTipText(tip);
+        b.setMargin(new java.awt.Insets(6, 10, 6, 10));
+        b.setFocusable(false);
+        b.addActionListener(e -> {
+            JPopupMenu m = new JPopupMenu();
+            for (JMenuItem i : items) {
+                if (i == null) m.addSeparator();
+                else m.add(i);
+            }
+            m.show(b, 0, b.getHeight());
+        });
+        return b;
+    }
+
+    /** One-line description of what the current filters hide. */
+    private void updateSummary() {
+        if (filterSummary == null || cur == null || !cur.isHttp()) return;
+        List<String> s = new ArrayList<>();
+        if (!cur.incFirst) s.add("no first line");
+        if (!cur.incHeaders) s.add("no headers");
+        else if (!cur.hiddenHeaders.isEmpty()) s.add(cur.hiddenHeaders.size() + " header" + (cur.hiddenHeaders.size() == 1 ? "" : "s") + " hidden");
+        if (!cur.incBody) s.add("no body");
+        else {
+            if (!cur.hiddenParams.isEmpty()) s.add(cur.hiddenParams.size() + " param" + (cur.hiddenParams.size() == 1 ? "" : "s") + " hidden");
+            if (cur.maxBodyChars > 0) s.add("body cut at " + cur.maxBodyChars);
+        }
+        filterSummary.setText(s.isEmpty() ? "everything shown" : String.join(", ", s));
+    }
+
     private static JButton btn(String text, String tip, java.awt.event.ActionListener l) {
         JButton b = new JButton(text);
         b.setToolTipText(tip);
@@ -669,6 +743,7 @@ final class CapturePanel extends JPanel {
 
     private void select(Block b) {
         cur = b;
+        preview.followBlock(b);
         loading = true;
         try {
             if (b != null) {
@@ -689,6 +764,7 @@ final class CapturePanel extends JPanel {
                     parList.set(ps == null ? new ArrayList<>() : ps, 0, b.hiddenParams, this::filtersChanged);
                 }
                 loadStyle(b);
+                updateSummary();
                 annModel.clear();
                 for (Annotation a : b.annotations) annModel.addElement(a);
                 annList.clearSelection();
@@ -761,6 +837,7 @@ final class CapturePanel extends JPanel {
         ta.setCaretPosition(0);
         loading = false;
         annList.repaint();
+        updateSummary();
         refresh();
     }
 
@@ -937,9 +1014,9 @@ final class CapturePanel extends JPanel {
         row.add(new JLabel("Delay (seconds):"));
         row.add(delay);
         int r = JOptionPane.showConfirmDialog(w, new Object[]{
-                "<html>After you press OK, switch to the view to capture - for example the response's<br>"
-                        + "<b>Render</b> tab in Burp (press Render there first). The screen is grabbed when the<br>"
-                        + "countdown ends and you then select the region to include.</html>", row},
+                Txt.lines(false, "After you press OK, switch to the view to capture - for example the response's",
+                        "Render tab in Burp (press Render there first). The screen is grabbed when the",
+                        "countdown ends and you then select the region to include."), row},
                 "Capture screen region", JOptionPane.OK_CANCEL_OPTION);
         if (r != JOptionPane.OK_OPTION) return;
         ScreenGrab.grab(ival(delay), (img, ratio) -> {
@@ -974,6 +1051,15 @@ final class CapturePanel extends JPanel {
         cur.annotations.remove(a);
         annModel.removeElement(a);
         refresh();
+    }
+
+    private void resetLayer() {
+        if (cur == null) return;
+        commitHistory();
+        cur.offX = cur.offY = cur.boxW = cur.imageW = 0;
+        renderNow();
+        commitHistory();
+        onChanged.run();
     }
 
     private void resetAdjust() {

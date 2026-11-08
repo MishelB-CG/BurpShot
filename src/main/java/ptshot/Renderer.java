@@ -105,14 +105,29 @@ final class Renderer {
         }
     }
 
+    /** Where a whole block (label + body) ended up in the output (device pixels) - used to move / resize layers. */
+    static final class Layer {
+        final Block block;
+        final Rectangle rect;
+        final int bodyW;   // width of the text box / image itself (the part manual resizing controls)
+
+        Layer(Block block, Rectangle rect, int bodyW) {
+            this.block = block;
+            this.rect = rect;
+            this.bodyW = bodyW;
+        }
+    }
+
     static final class Result {
         final BufferedImage image;
         final List<Geo> geo;
+        final List<Layer> layers;
         final double scale;
 
-        Result(BufferedImage image, List<Geo> geo, double scale) {
+        Result(BufferedImage image, List<Geo> geo, List<Layer> layers, double scale) {
             this.image = image;
             this.geo = geo;
+            this.layers = layers;
             this.scale = scale;
         }
     }
@@ -170,7 +185,7 @@ final class Renderer {
             g.setColor(st.background);
             g.fillRect(0, 0, 10, 10);
             g.dispose();
-            return new Result(e, new ArrayList<Geo>(), S);
+            return new Result(e, new ArrayList<Geo>(), new ArrayList<Layer>(), S);
         }
 
         int inner = 0;
@@ -181,6 +196,7 @@ final class Renderer {
             inner = Math.max(inner, w);
         }
         int W = inner + 2 * margin;
+        final int ruleW = W;
         List<Rule> rules = new ArrayList<>();
         int y = margin;
         for (int ri = 0; ri < rows.size(); ri++) {
@@ -205,14 +221,23 @@ final class Renderer {
                 if (last.separatorAfter) {
                     int sw = sepPx(last, st, S);
                     y += rowGap;
-                    rules.add(new Rule(0, y, W, sw, sepColor(last, st)));
+                    rules.add(new Rule(0, y, ruleW, sw, sepColor(last, st)));
                     y += sw + rowGap;
                 } else {
                     y += rowGap;
                 }
             }
         }
-        int H = y + margin;
+        // manual layer moves (clamped to the canvas); the canvas grows to hold layers dragged past the edge
+        int right = W, bottom = y + margin;
+        for (Laid a : all) {
+            a.x = Math.max(0, a.x + px(a.b.offX, S));
+            a.y = Math.max(0, a.y + px(a.b.offY, S));
+            right = Math.max(right, a.x + a.w + margin);
+            bottom = Math.max(bottom, a.y + a.h + margin);
+        }
+        W = right;
+        int H = bottom;
 
         BufferedImage out = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = out.createGraphics();
@@ -254,7 +279,9 @@ final class Renderer {
             }
         }
         g2.dispose();
-        return new Result(out, geo, S);
+        List<Layer> layers = new ArrayList<>();
+        for (Laid a : all) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW));
+        return new Result(out, geo, layers, S);
     }
 
     /** Anchor rectangle + padding + the user's manual edge adjustments (1x pixels, set by dragging in the preview). */
@@ -350,6 +377,7 @@ final class Renderer {
             if (a.img != null) {
                 double k = Math.min(1.0, b.imageMaxWidth / (double) a.img.getWidth()) * S;
                 if (limit > 0 && a.img.getWidth() * k > limit) k = limit / (double) a.img.getWidth();
+                if (b.imageW > 0) k = b.imageW * S / a.img.getWidth(); // manual size wins (and may enlarge)
                 a.imgW = Math.max(1, (int) Math.round(a.img.getWidth() * k));
                 a.imgH = Math.max(1, (int) Math.round(a.img.getHeight() * k));
             }
@@ -363,13 +391,13 @@ final class Renderer {
             a.lineH = fm.getHeight();
             a.asc = fm.getAscent();
             a.bpad = b.background != null ? px(6, S) : 0;
-            layoutLines(a, b, limit);
+            layoutLines(a, b, b.boxW > 0 ? px(b.boxW, S) : limit);
             double mw = 0;
             for (VLine v : a.lines) mw = Math.max(mw, a.sw(a.bf, v.text));
             a.textW = (int) Math.ceil(mw);
             a.textH = a.lines.size() * a.lineH;
             a.bpad = b.background != null ? px(6, S) : 0;
-            a.boxW = a.lines.isEmpty() ? 0 : a.textW + 2 * a.bpad;
+            a.boxW = a.lines.isEmpty() ? 0 : (b.boxW > 0 ? Math.max(px(b.boxW, S), a.textW + 2 * a.bpad) : a.textW + 2 * a.bpad);
             a.boxH = a.lines.isEmpty() ? 0 : a.textH + 2 * a.bpad;
             if (b.highlight && b.isHttp()) a.colors = Highlighter.colorize(b.text, b.kind == Block.Kind.REQUEST, a.base, st.syn);
         }
@@ -386,6 +414,7 @@ final class Renderer {
             double fit = Math.max(a.sw(a.bf, "0") * 8, limit - 2.0 * a.bpad);
             maxPx = maxPx > 0 ? Math.min(maxPx, fit) : fit;
         }
+        if (b.boxW > 0) maxPx = Math.max(a.sw(a.bf, "0") * 4, limit - 2.0 * a.bpad); // manual width wins over wrap columns
         int lineCap = b.maxLines > 0 ? Math.min(b.maxLines, HARD_LINE_CAP) : HARD_LINE_CAP;
         int off = 0;
         boolean truncated = false;

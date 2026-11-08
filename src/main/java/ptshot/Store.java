@@ -61,6 +61,10 @@ final class Store {
         m.put("original", b.original);
         m.put("text", b.text);
         m.put("imageMaxWidth", b.imageMaxWidth);
+        m.put("offX", b.offX);
+        m.put("offY", b.offY);
+        m.put("boxW", b.boxW);
+        m.put("imageW", b.imageW);
         if (b.image != null && !images) {
             m.put("imageId", System.identityHashCode(b.image) + ":" + b.image.getWidth() + "x" + b.image.getHeight());
         } else if (b.image != null) {
@@ -161,6 +165,10 @@ final class Store {
         b.original = str(m, "original", "");
         b.text = str(m, "text", "");
         b.imageMaxWidth = (int) num(m, "imageMaxWidth", 500);
+        b.offX = num(m, "offX", 0);
+        b.offY = num(m, "offY", 0);
+        b.boxW = num(m, "boxW", 0);
+        b.imageW = num(m, "imageW", 0);
         String img = str(m, "image", null);
         if (img != null) {
             try {

@@ -52,22 +52,26 @@ final class MainPanel extends JPanel {
         set.addActionListener(e -> openSettings());
         bar.add(fresh);
         bar.add(set);
-        bar.add(new JLabel("Right-click any request/response in Proxy, Repeater, Logger... \u2192 Extensions \u2192 PT Screenshot Builder \u2192 Send to builder"));
+        bar.add(new JLabel("Right-click any request/response in Proxy, Repeater, Logger... \u2192 Extensions \u2192 BurpShot \u2192 Send to BurpShot"));
         add(bar, BorderLayout.NORTH);
 
-        JLabel help = new JLabel("<html><body style='width:640px'>"
-                + "<h2>PT Screenshot Builder</h2>"
-                + "<p>Right-click a request (or several) anywhere in Burp and choose <b>Extensions &rarr; PT Screenshot Builder &rarr; Send to builder</b>. "
+        // A JEditorPane (not a JLabel): Burp's theming can switch HTML rendering off on labels, which showed the raw markup.
+        javax.swing.JEditorPane help = new javax.swing.JEditorPane("text/html", "<html><body>"
+                + "<h2>BurpShot</h2>"
+                + "<p>Right-click a request (or several) anywhere in Burp and choose <b>Extensions &rarr; BurpShot &rarr; Send to BurpShot</b>. "
                 + "Each one opens as its own tab here.</p>"
                 + "<ol>"
-                + "<li><b>Content</b> - pick the first line, headers, body, individual headers / form parameters, or edit the text freely. "
+                + "<li><b>Content</b> - pick the first line, headers, body, individual headers / form parameters, or edit the text freely. Bodies open in the <i>Pretty</i> view (JSON / XML / HTML re-indented); switch to <i>Raw</i> for the exact bytes. "
                 + "Select text and use <i>Selection &rarr; ...</i>, <i>Ellipsize outside</i> or the line buttons to keep only part of a header value or JSON element.</li>"
                 + "<li><b>Annotate</b> - select text and press Box / Arrow / Pixelate / Blur. They stay attached to that text. Style them in the <i>Annotations</i> tab.</li>"
                 + "<li><b>Style &amp; layout</b> - labels (default Calibri, red), fonts, separators, put blocks beside each other, add custom headers/footers and image blocks.</li>"
                 + "<li>The right side is a live preview. <b>Copy image</b> / <b>Save PNG</b> export it, or use <b>Preview window</b> and capture it with any external tool.</li>"
                 + "</ol></body></html>");
+        help.setEditable(false);
+        help.putClientProperty(javax.swing.JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
+        help.setFont(new JLabel().getFont());
         help.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
-        help.setVerticalAlignment(JLabel.TOP);
+        help.setCaretPosition(0);
         tabs.addTab("Welcome", new JScrollPane(help));
         add(tabs, BorderLayout.CENTER);
         restore();

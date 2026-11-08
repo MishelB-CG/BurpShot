@@ -22,6 +22,6 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 jar {
-    archiveBaseName = 'pt-screenshot-builder'
+    archiveBaseName = 'burpshot'
     archiveVersion = ''
 }

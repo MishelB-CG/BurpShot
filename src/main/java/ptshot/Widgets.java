@@ -235,10 +235,35 @@ final class Checklist extends JPanel {
         JScrollPane sp = new JScrollPane(box);
         sp.setPreferredSize(new Dimension(120, 96));
         add(sp);
+        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        bar.add(small("Select all", true));
+        bar.add(small("Select none", false));
+        add(bar, BorderLayout.SOUTH);
+    }
+
+    private final java.util.List<JCheckBox> boxes = new java.util.ArrayList<>();
+    private Runnable bulk = () -> { };
+
+    private JButton small(String text, boolean on) {
+        JButton b = new JButton(text);
+        b.setFocusable(false);
+        b.setMargin(new Insets(1, 5, 1, 5));
+        b.setToolTipText(on ? "Show every entry" : "Hide every entry");
+        b.addActionListener(e -> {
+            for (JCheckBox cb : boxes) cb.setSelected(on);
+            bulk.run();
+        });
+        return b;
     }
 
     void set(List<String> texts, int firstId, Set<Integer> hidden, Runnable onChange) {
         box.removeAll();
+        boxes.clear();
+        bulk = () -> {
+            hidden.clear();
+            for (int i = 0; i < boxes.size(); i++) if (!boxes.get(i).isSelected()) hidden.add(firstId + i);
+            onChange.run();
+        };
         for (int i = 0; i < texts.size(); i++) {
             final int id = firstId + i;
             String t = texts.get(i);
@@ -250,6 +275,7 @@ final class Checklist extends JPanel {
                 onChange.run();
             });
             box.add(cb);
+            boxes.add(cb);
         }
         box.revalidate();
         box.repaint();
@@ -268,6 +294,8 @@ final class PreviewPanel extends JPanel implements Scrollable {
         void end();                  // drag finished (history boundary)
 
         void delete(Annotation a);
+
+        void pickedBlock(Block b);   // user clicked a layer (whole block) in the preview
     }
 
     private static final class Hit {
@@ -283,6 +311,11 @@ final class PreviewPanel extends JPanel implements Scrollable {
         int oDx, oDy;
         Rectangle rect;
         double[] arrow;
+        // layer drags
+        Block blk;
+        double oX, oY;
+        Rectangle lrect;
+        int bodyW;
     }
 
     private BufferedImage img;
@@ -290,6 +323,7 @@ final class PreviewPanel extends JPanel implements Scrollable {
     private Renderer.Result res;
     private Editor editor;
     private Annotation selected, hover;
+    private Block selLayer, hoverLayer;
     private Drag drag;
 
     PreviewPanel() {
@@ -302,13 +336,10 @@ final class PreviewPanel extends JPanel implements Scrollable {
                 requestFocusInWindow();
                 Hit h = hitTest(e.getPoint());
                 if (h == null) {
-                    if (selected != null) {
-                        selected = null;
-                        editor.picked(null);
-                    }
-                    repaint();
+                    pressLayer(e);
                     return;
                 }
+                selLayer = null;
                 if (h.g.an != selected) {
                     selected = h.g.an;
                     editor.picked(selected);
@@ -333,7 +364,8 @@ final class PreviewPanel extends JPanel implements Scrollable {
             @Override
             public void mouseDragged(java.awt.event.MouseEvent e) {
                 if (drag == null || res == null) return;
-                applyDrag(e);
+                if (drag.blk != null) applyLayerDrag(e);
+                else applyDrag(e);
                 editor.edited();
             }
 
@@ -355,7 +387,24 @@ final class PreviewPanel extends JPanel implements Scrollable {
                     hover = nh;
                     repaint();
                 }
-                setCursor(Cursor.getPredefinedCursor(h == null ? Cursor.DEFAULT_CURSOR : cursorFor(h.part)));
+                int cur = h == null ? Cursor.DEFAULT_CURSOR : cursorFor(h.part);
+                Block nl = null;
+                if (h == null) {
+                    int lp = layerHandleAt(e.getPoint());
+                    if (lp >= 0) cur = cursorFor(lp);
+                    else {
+                        Renderer.Layer ly = layerAt(e.getPoint());
+                        if (ly != null) {
+                            nl = ly.block;
+                            cur = Cursor.MOVE_CURSOR;
+                        }
+                    }
+                }
+                if (nl != hoverLayer) {
+                    hoverLayer = nl;
+                    repaint();
+                }
+                setCursor(Cursor.getPredefinedCursor(cur));
             }
         };
         addMouseListener(ma);
@@ -366,6 +415,9 @@ final class PreviewPanel extends JPanel implements Scrollable {
             if (selected != null && editor != null) {
                 selected = null;
                 editor.picked(null);
+                repaint();
+            } else if (selLayer != null) {
+                selLayer = null;
                 repaint();
             }
         });
@@ -401,6 +453,12 @@ final class PreviewPanel extends JPanel implements Scrollable {
     }
 
     private void nudge(int dx, int dy) {
+        if (selected == null && selLayer != null && editor != null) {
+            selLayer.offX += dx;
+            selLayer.offY += dy;
+            editor.edited();
+            return;
+        }
         if (selected == null || editor == null) return;
         Annotation a = selected;
         if (a.type == Annotation.Type.ARROW) {
@@ -436,6 +494,14 @@ final class PreviewPanel extends JPanel implements Scrollable {
     void setSelected(Annotation a) {
         selected = a;
         repaint();
+    }
+
+    /** The block list selection changed: if a layer is being edited, follow the selection. */
+    void followBlock(Block b) {
+        if (selLayer != null && b != selLayer) {
+            selLayer = b;
+            repaint();
+        }
     }
 
     void setZoom(double z) {
@@ -530,6 +596,117 @@ final class PreviewPanel extends JPanel implements Scrollable {
             }
         }
         return best;
+    }
+
+    // ---------------------------------------------------------------- layers (whole blocks)
+
+    private Renderer.Layer layerOf(Block b) {
+        if (res == null || b == null) return null;
+        for (Renderer.Layer l : res.layers) if (l.block == b) return l;
+        return null;
+    }
+
+    /** Topmost layer under the point (later blocks are drawn on top). */
+    private Renderer.Layer layerAt(Point p) {
+        if (res == null) return null;
+        for (int i = res.layers.size() - 1; i >= 0; i--) {
+            Renderer.Layer l = res.layers.get(i);
+            if (scr(l.rect).contains(p)) return l;
+        }
+        return null;
+    }
+
+    /** Which resize handles a layer offers: text boxes only change width (E / W); images scale proportionally (all 8). */
+    private static boolean handleUsed(Block b, int i) {
+        return b.kind == Block.Kind.IMAGE || i == 3 || i == 7;
+    }
+
+    private int layerHandleAt(Point p) {
+        Renderer.Layer l = layerOf(selLayer);
+        if (l == null || selected != null) return -1;
+        Point[] hp = handles(scr(l.rect));
+        for (int i = 0; i < 8; i++) {
+            if (handleUsed(l.block, i) && Math.abs(p.x - hp[i].x) <= 6 && Math.abs(p.y - hp[i].y) <= 6) return i;
+        }
+        return -1;
+    }
+
+    private void pressLayer(java.awt.event.MouseEvent e) {
+        if (selected != null) {
+            selected = null;
+            editor.picked(null);
+        }
+        int part = layerHandleAt(e.getPoint());
+        Renderer.Layer l = part >= 0 ? layerOf(selLayer) : layerAt(e.getPoint());
+        if (l == null) {
+            selLayer = null;
+            repaint();
+            return;
+        }
+        if (part < 0) part = 8;
+        if (l.block != selLayer) {
+            selLayer = l.block;
+            editor.pickedBlock(l.block);
+        }
+        Drag d = new Drag();
+        d.part = part;
+        d.press = e.getPoint();
+        d.blk = l.block;
+        d.oX = l.block.offX;
+        d.oY = l.block.offY;
+        d.lrect = new Rectangle(l.rect);
+        d.bodyW = l.bodyW;
+        drag = d;
+        editor.begin();
+        repaint();
+    }
+
+    private void applyLayerDrag(java.awt.event.MouseEvent e) {
+        double k = eff(), S = res.scale;
+        double dx = (e.getX() - drag.press.x) / k / S, dy = (e.getY() - drag.press.y) / k / S; // 1x pixels
+        Block b = drag.blk;
+        if (drag.part == 8) {
+            dx = Math.max(dx, -drag.lrect.x / S);
+            dy = Math.max(dy, -drag.lrect.y / S);
+            b.offX = drag.oX + dx;
+            b.offY = drag.oY + dy;
+            return;
+        }
+        int part = drag.part;
+        boolean L = part == 0 || part == 6 || part == 7, R = part == 2 || part == 3 || part == 4;
+        boolean T = part == 0 || part == 1 || part == 2, B = part == 4 || part == 5 || part == 6;
+        double w0 = drag.bodyW / S;
+        double delta = (L || R) ? (R ? dx : -dx) : 0;
+        double aspect = 1;
+        if (b.kind == Block.Kind.IMAGE && b.image != null) {
+            aspect = b.image.getHeight() / (double) b.image.getWidth();
+            if (!(L || R)) delta = (B ? dy : -dy) / aspect; // top / bottom edge: derive the width from the height change
+        }
+        double nw = Math.max(b.kind == Block.Kind.IMAGE ? 20 : 40, w0 + delta);
+        if (b.kind == Block.Kind.IMAGE) b.imageW = nw;
+        else b.boxW = nw;
+        double shiftX = L ? -(nw - w0) : 0;
+        double shiftY = (b.kind == Block.Kind.IMAGE && T) ? -(nw - w0) * aspect : 0;
+        b.offX = Math.max(drag.oX + shiftX, drag.oX - drag.lrect.x / S);
+        b.offY = Math.max(drag.oY + shiftY, drag.oY - drag.lrect.y / S);
+    }
+
+    private void layerOutline(Graphics2D g, Renderer.Layer l, Color c, boolean handlesToo) {
+        Rectangle s = scr(l.rect);
+        g.setColor(c);
+        g.setStroke(new java.awt.BasicStroke(1.5f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, new float[]{6f, 4f}, 0f));
+        g.drawRect(s.x - 3, s.y - 3, s.width + 6, s.height + 6);
+        if (handlesToo) {
+            g.setStroke(new java.awt.BasicStroke(1.5f));
+            Point[] hp = handles(s);
+            for (int i = 0; i < 8; i++) {
+                if (!handleUsed(l.block, i)) continue;
+                g.setColor(Color.WHITE);
+                g.fillRect(hp[i].x - 4, hp[i].y - 4, 8, 8);
+                g.setColor(c);
+                g.drawRect(hp[i].x - 4, hp[i].y - 4, 8, 8);
+            }
+        }
     }
 
     private static int cursorFor(int part) {
@@ -627,6 +804,10 @@ final class PreviewPanel extends JPanel implements Scrollable {
             if (hv != null && hover != selected) outline(g, hv, new Color(0, 120, 255, 140), false, blue);
             Renderer.Geo sg = geoOf(selected);
             if (sg != null) outline(g, sg, blue, true, blue);
+            Renderer.Layer hl = layerOf(hoverLayer);
+            if (hl != null && hoverLayer != selLayer && hover == null) layerOutline(g, hl, new Color(0, 120, 255, 120), false);
+            Renderer.Layer sl = layerOf(selLayer);
+            if (sl != null && selected == null) layerOutline(g, sl, blue, true);
         }
         g.dispose();
     }
@@ -680,5 +861,148 @@ final class PreviewPanel extends JPanel implements Scrollable {
 
     public boolean getScrollableTracksViewportHeight() {
         return false;
+    }
+}
+
+/** Text helpers that never rely on HTML in a JLabel (Burp's theming can disable HTML rendering there, showing raw markup). */
+final class Txt {
+    private Txt() {}
+
+    /** Bold heading, optionally followed by a plain-weight remark: "Label (the red header)". */
+    static JPanel heading(String bold, String rest) {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        p.setOpaque(false);
+        JLabel b = new JLabel(bold);
+        b.setFont(b.getFont().deriveFont(java.awt.Font.BOLD));
+        p.add(b);
+        if (rest != null && !rest.isEmpty()) p.add(new JLabel(" " + rest));
+        return p;
+    }
+
+    /** Several plain-text lines, one label each (no HTML, no wrapping surprises). */
+    static JPanel lines(boolean italic, String... ls) {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setOpaque(false);
+        for (String s : ls) {
+            JLabel l = new JLabel(s);
+            l.setFont(l.getFont().deriveFont(italic ? java.awt.Font.ITALIC : java.awt.Font.PLAIN));
+            l.setAlignmentX(Component.LEFT_ALIGNMENT);
+            p.add(l);
+        }
+        return p;
+    }
+
+    /** Wrapping, read-only, theme-friendly note. */
+    static javax.swing.JTextArea note(String text, boolean italic) {
+        javax.swing.JTextArea t = new javax.swing.JTextArea(text);
+        t.setEditable(false);
+        t.setFocusable(false);
+        t.setLineWrap(true);
+        t.setWrapStyleWord(true);
+        t.setOpaque(false);
+        t.setBorder(null);
+        JLabel ref = new JLabel();
+        t.setFont(ref.getFont().deriveFont(italic ? java.awt.Font.ITALIC : java.awt.Font.PLAIN));
+        t.setForeground(ref.getForeground());
+        return t;
+    }
+}
+
+/** Small vector icons drawn in code (theme-aware strokes, no image assets). */
+final class Icons {
+    private Icons() {}
+
+    private interface Painter {
+        void paint(Graphics2D g, Color fg);
+    }
+
+    /** Icon edge length: follows the UI font so it scales with Burp's font size / HiDPI, and is never tiny. */
+    private static int size() {
+        java.awt.Font ft = javax.swing.UIManager.getFont("Button.font");
+        int fs = ft == null ? 12 : ft.getSize();
+        return Math.max(26, (int) Math.round(fs * 2.2));
+    }
+
+    private static Icon make(Painter p) {
+        return new Icon() {
+            public void paintIcon(Component c, Graphics g0, int x, int y) {
+                Graphics2D g = (Graphics2D) g0.create();
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g.translate(x, y);
+                g.scale(size() / 18.0, size() / 18.0);
+                g.setStroke(new java.awt.BasicStroke(1.9f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+                p.paint(g, c != null && c.isEnabled() ? c.getForeground() : Color.GRAY);
+                g.dispose();
+            }
+
+            public int getIconWidth() {
+                return size();
+            }
+
+            public int getIconHeight() {
+                return size();
+            }
+        };
+    }
+
+    static Icon box() {
+        return make((g, fg) -> {
+            g.setColor(new Color(215, 30, 30));
+            g.drawRect(2, 4, 13, 9);
+        });
+    }
+
+    static Icon arrow() {
+        return make((g, fg) -> {
+            g.setColor(new Color(215, 30, 30));
+            g.drawLine(3, 14, 14, 3);
+            g.drawLine(14, 3, 8, 3);
+            g.drawLine(14, 3, 14, 9);
+        });
+    }
+
+    static Icon pixelate() {
+        return make((g, fg) -> {
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++) {
+                    int v = ((r + c) % 2 == 0) ? 90 : 170;
+                    g.setColor(new Color(v, v, v));
+                    g.fillRect(2 + c * 5, 2 + r * 5, 5, 5);
+                }
+        });
+    }
+
+    static Icon blur() {
+        return make((g, fg) -> {
+            for (int i = 0; i < 4; i++) {
+                g.setColor(new Color(110, 110, 110, 190 - i * 45));
+                int d = 6 + i * 3;
+                g.fillOval(9 - d / 2, 9 - d / 2, d, d);
+            }
+        });
+    }
+
+    static Icon lines() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawLine(2, 4, 16, 4);
+            g.drawLine(2, 9, 10, 9);
+            g.drawLine(2, 14, 16, 14);
+            g.drawLine(12, 7, 16, 11);
+            g.drawLine(16, 7, 12, 11);
+        });
+    }
+
+    static Icon picture() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawRect(2, 3, 14, 12);
+            g.drawLine(3, 13, 8, 8);
+            g.drawLine(8, 8, 11, 11);
+            g.drawLine(11, 11, 13, 9);
+            g.drawLine(13, 9, 15, 11);
+            g.fillOval(11, 5, 3, 3);
+        });
     }
 }

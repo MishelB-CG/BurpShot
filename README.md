@@ -1,4 +1,4 @@
-# PT Screenshot Builder (Burp Suite extension, Montoya API)
+# BurpShot (Burp Suite extension, Montoya API)
 
 Builds clean, consistent "Request / Response" evidence screenshots for pentest reports:
 red Calibri labels, Burp-style syntax colours, grey separator line, red boxes, arrows, pixelation/blur.
@@ -8,14 +8,14 @@ crisp at any scale and always the same format. A live preview, a separate "Previ
 and *Save PNG* are built in.
 
 ## Install
-Burp -> Extensions -> Add -> Extension type *Java* -> select `pt-screenshot-builder.jar`.
+Burp -> Extensions -> Add -> Extension type *Java* -> select `burpshot.jar`.
 
 Build from source: `gradle jar` (output in `build/libs/`), or
 `javac --release 17 -cp montoya-api.jar -d out src/main/java/ptshot/*.java` + copy `src/main/resources/META-INF`.
 
 ## Use
-1. Right-click request(s) in Proxy / Repeater / Logger / Target... -> **Extensions -> PT Screenshot Builder -> Send to PT Screenshot Builder**.
-2. Open the **PT Screenshot** tab. Each capture is a tab. Blocks (Request, Response, custom text, images) are listed top-left.
+1. Right-click request(s) in Proxy / Repeater / Logger / Target... -> **Extensions -> BurpShot -> Send to BurpShot**.
+2. Open the **BurpShot** tab. Each capture is a tab. Blocks (Request, Response, custom text, images) are listed top-left.
 3. **Content tab** - tick first line / headers / body, hide single headers or form parameters, pretty-print JSON, cap body size,
    or edit the text directly. Select text and use:
    * *Selection -> ...*, *Ellipsize outside* (keep `Cookie: ...session=abc...`) for **parts of a value**

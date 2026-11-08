@@ -27,7 +27,7 @@ public class PtScreenshotExtension implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
         this.api = api;
-        api.extension().setName("PT Screenshot Builder");
+        api.extension().setName("BurpShot");
 
         Settings st = new Settings();
         try {
@@ -68,7 +68,7 @@ public class PtScreenshotExtension implements BurpExtension {
                 }
             });
             api.userInterface().applyThemeToComponent(panel);
-            api.userInterface().registerSuiteTab("PT Screenshot", panel);
+            api.userInterface().registerSuiteTab("BurpShot", panel);
         });
 
         api.userInterface().registerContextMenuItemsProvider(new ContextMenuItemsProvider() {
@@ -78,7 +78,7 @@ public class PtScreenshotExtension implements BurpExtension {
                 event.messageEditorRequestResponse().ifPresent(m -> items.add(m.requestResponse()));
                 if (items.isEmpty()) items.addAll(event.selectedRequestResponses());
                 if (items.isEmpty()) return new ArrayList<>();
-                JMenuItem mi = new JMenuItem("Send to PT Screenshot Builder");
+                JMenuItem mi = new JMenuItem("Send to BurpShot");
                 mi.addActionListener(e -> SwingUtilities.invokeLater(() -> {
                     for (HttpRequestResponse rr : items) send(rr);
                 }));
@@ -94,7 +94,7 @@ public class PtScreenshotExtension implements BurpExtension {
                 panel.disposeWindows();
             }
         });
-        api.logging().logToOutput("PT Screenshot Builder loaded. Right-click a request -> Extensions -> PT Screenshot Builder.");
+        api.logging().logToOutput("BurpShot loaded. Right-click a request -> Extensions -> BurpShot.");
     }
 
     private void send(HttpRequestResponse rr) {
@@ -105,7 +105,7 @@ public class PtScreenshotExtension implements BurpExtension {
             if (rr.hasResponse()) response = renderResponse(rr.response());
             if (panel != null) panel.addCapture(req.method() + " " + req.path(), request, response);
         } catch (Throwable t) {
-            api.logging().logToError("PT Screenshot Builder: " + t);
+            api.logging().logToError("BurpShot: " + t);
         }
     }
 
