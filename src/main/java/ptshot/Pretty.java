@@ -27,6 +27,21 @@ final class Pretty {
         return body;
     }
 
+    /** Back to a compact form (used when switching Pretty -> Raw on text that was edited by hand). */
+    static String compact(String body, String contentType) {
+        String ct = contentType == null ? "" : contentType.toLowerCase();
+        String t = body.trim();
+        try {
+            if (t.startsWith("{") || t.startsWith("[")) {
+                if (ct.contains("json") || (!ct.contains("xml") && !ct.contains("html"))) return Json.compact(t);
+            }
+            if (t.startsWith("<")) return t.replaceAll(">[ \\t]*\\n\\s*", ">").replaceAll("\\n\\s*<", "<");
+        } catch (RuntimeException ignored) {
+            // fall through to the untouched body
+        }
+        return body;
+    }
+
     private static final int OPEN = 0, CLOSE = 1, SELF = 2, TEXT = 3, OTHER = 4;
 
     private static final class Tok {

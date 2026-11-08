@@ -61,11 +61,13 @@ final class MainPanel extends JPanel {
                 + "<p>Right-click a request (or several) anywhere in Burp and choose <b>Extensions &rarr; BurpShot &rarr; Send to BurpShot</b>. "
                 + "Each one opens as its own tab here.</p>"
                 + "<ol>"
-                + "<li><b>Content</b> - pick the first line, headers, body, individual headers / form parameters, or edit the text freely. Bodies open in the <i>Pretty</i> view (JSON / XML / HTML re-indented); switch to <i>Raw</i> for the exact bytes. "
-                + "Select text and use <i>Selection &rarr; ...</i>, <i>Ellipsize outside</i> or the line buttons to keep only part of a header value or JSON element.</li>"
-                + "<li><b>Annotate</b> - select text and press Box / Arrow / Pixelate / Blur. They stay attached to that text. Style them in the <i>Annotations</i> tab.</li>"
-                + "<li><b>Style &amp; layout</b> - labels (default Calibri, red), fonts, separators, put blocks beside each other, add custom headers/footers and image blocks.</li>"
-                + "<li>The right side is a live preview. <b>Copy image</b> / <b>Save PNG</b> export it, or use <b>Preview window</b> and capture it with any external tool.</li>"
+                + "<li><b>Content tab</b> - choose what is shown: <i>Pretty / Raw</i> body (JSON / XML / HTML re-indented), <i>Filters</i> for first line, headers, form parameters and body length, or edit the text freely. "
+                + "<b>Select text and right-click</b> for Box / Arrow / Pixelate / Blur on that text (they stay attached to it) and for edit actions like <i>Keep selection, ... the rest of the line</i>. <b>Ctrl+F</b> searches the editor (all layers: request and response).</li>"
+                + "<li><b>Tool palette</b> (left of the preview) - select / move, rectangle selection, pencil, brush, bucket, eraser; free Box / Arrow / Pixelate / Blur elements; new Text, <b>Terminal</b>, <b>Table</b> (Intruder, Proxy history, ...) and Image layers; <b>Pick from Burp</b> (turn any Burp button, text or table into a layer; Ctrl+click switches tabs while picking); <b>Crop</b>.</li>"
+                + "<li><b>Preview</b> - click an element or a layer to select it, drag to move, handles to resize, <b>Del</b> deletes it, <b>right-click</b> for a menu (delete, duplicate, order, crop, align, add elements at the click).</li>"
+                + "<li><b>Annotations</b> and <b>Style &amp; layout</b> tabs - element colours, arrows, pixelate strength; fonts, labels, wrapping, side-by-side blocks, separators, alignment.</li>"
+                + "<li><b>Terminal layer</b> - paste output from a cmd / PowerShell / bash window; ANSI colours are kept, with dark / light themes, window frames, a highlighted command and colours by indentation.</li>"
+                + "<li><b>Export</b> - <b>Copy image</b> / <b>Save PNG</b>, or <b>Preview window</b> to capture it with another tool. Undo / redo with Ctrl+Z / Ctrl+Y. Everything is saved in the Burp project.</li>"
                 + "</ol></body></html>");
         help.setEditable(false);
         help.putClientProperty(javax.swing.JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);

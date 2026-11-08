@@ -65,6 +65,27 @@ final class Store {
         m.put("offY", b.offY);
         m.put("boxW", b.boxW);
         m.put("imageW", b.imageW);
+        m.put("overlay", b.overlay);
+        m.put("raw", b.raw);
+        m.put("preset", b.preset);
+        m.put("chrome", b.chrome);
+        m.put("title", b.title);
+        m.put("theme", b.theme);
+        m.put("cmdStyle", b.cmdStyle);
+        m.put("indentColors", b.indentColors);
+        if (b.accents != null) {
+            List<Object> al = new ArrayList<>();
+            for (Color ac : b.accents) al.add(ac.getRGB() & 0xffffff);
+            m.put("accents", al);
+        }
+        if (b.palette != null) {
+            List<Object> pl = new ArrayList<>();
+            for (Color pc : b.palette) pl.add(pc.getRGB() & 0xffffff);
+            m.put("palette", pl);
+        }
+        List<Object> rl = new ArrayList<>();
+        for (List<String> r : b.rows) rl.add(new ArrayList<Object>(r));
+        m.put("rows", rl);
         if (b.image != null && !images) {
             m.put("imageId", System.identityHashCode(b.image) + ":" + b.image.getWidth() + "x" + b.image.getHeight());
         } else if (b.image != null) {
@@ -111,6 +132,11 @@ final class Store {
             x.put("offR", a.offR);
             x.put("offB", a.offB);
             x.put("strength", a.strength);
+            x.put("free", a.free);
+            x.put("fx", a.fx);
+            x.put("fy", a.fy);
+            x.put("fw", a.fw);
+            x.put("fh", a.fh);
             an.add(x);
         }
         m.put("annotations", an);
@@ -169,6 +195,29 @@ final class Store {
         b.offY = num(m, "offY", 0);
         b.boxW = num(m, "boxW", 0);
         b.imageW = num(m, "imageW", 0);
+        b.overlay = bool(m, "overlay", false);
+        b.raw = str(m, "raw", "");
+        b.preset = str(m, "preset", "Windows cmd");
+        b.chrome = str(m, "chrome", "NONE");
+        b.title = str(m, "title", "");
+        b.theme = str(m, "theme", "DARK");
+        b.cmdStyle = bool(m, "cmdStyle", true);
+        b.indentColors = bool(m, "indentColors", true);
+        Object ao = m.get("accents");
+        if (ao instanceof List && ((List<Object>) ao).size() == 4) {
+            b.accents = new Color[4];
+            for (int i = 0; i < 4; i++) b.accents[i] = new Color(((Number) ((List<Object>) ao).get(i)).intValue());
+        }
+        Object po = m.get("palette");
+        if (po instanceof List && ((List<Object>) po).size() == 16) {
+            b.palette = new Color[16];
+            for (int i = 0; i < 16; i++) b.palette[i] = new Color(((Number) ((List<Object>) po).get(i)).intValue());
+        }
+        for (Object ro : (List<Object>) m.getOrDefault("rows", new ArrayList<>())) {
+            List<String> r = new ArrayList<>();
+            for (Object co : (List<Object>) ro) r.add(String.valueOf(co));
+            b.rows.add(r);
+        }
         String img = str(m, "image", null);
         if (img != null) {
             try {
@@ -210,6 +259,11 @@ final class Store {
             a.offR = num(x, "offR", 0);
             a.offB = num(x, "offB", 0);
             a.strength = (int) num(x, "strength", 8);
+            a.free = bool(x, "free", false);
+            a.fx = num(x, "fx", 0);
+            a.fy = num(x, "fy", 0);
+            a.fw = num(x, "fw", 0);
+            a.fh = num(x, "fh", 0);
             b.annotations.add(a);
         }
         return b;

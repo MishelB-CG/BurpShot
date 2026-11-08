@@ -32,6 +32,21 @@ final class Annotation {
     int dx, dy;
     double offL, offT, offR, offB; // manual edge adjustments (1x px) made by dragging in the preview
     int strength = 8;       // pixelate cell size / blur radius
+    boolean free;           // not attached to text: placed on the canvas (1x px) and moved by hand
+    double fx, fy, fw, fh;  // canvas rectangle of a free annotation
+
+    /** An element dropped onto the canvas (not attached to any text). Arrows start at the given point. */
+    static Annotation createFree(Type t, double cx, double cy) {
+        Annotation a = create(t, "", 0);
+        a.free = true;
+        double w = t == Type.BOX ? 200 : t == Type.ARROW ? 1 : 150, h = t == Type.BOX ? 64 : t == Type.ARROW ? 1 : 40;
+        a.fx = Math.max(0, cx - w / 2);
+        a.fy = Math.max(0, cy - h / 2);
+        a.fw = w;
+        a.fh = h;
+        if (t == Type.ARROW) a.edge = Edge.CENTER;
+        return a;
+    }
 
     static Annotation create(Type t, String anchor, int occurrence) {
         Annotation a = new Annotation();
@@ -46,14 +61,15 @@ final class Annotation {
 
     @Override
     public String toString() {
-        String s = anchor.replace("\n", "\u21b5");
+        if (free) return type + "  (free on canvas)";
+        String s = anchor.startsWith("\u0001b:") ? "table cells " + anchor.substring(3).replace(':', ',') : anchor.replace("\n", "\u21b5");
         if (s.length() > 40) s = s.substring(0, 37) + "...";
         return type + "  \"" + s + "\"";
     }
 }
 
 final class Block {
-    enum Kind { REQUEST, RESPONSE, CUSTOM, IMAGE }
+    enum Kind { REQUEST, RESPONSE, CUSTOM, IMAGE, TABLE, TERMINAL }
 
     Kind kind;
     // label ("Request", "Response", ...)
@@ -73,6 +89,18 @@ final class Block {
     double offX, offY;    // moved away from where the flow layout put it
     double boxW;          // text blocks: fixed box width (wrap width)
     double imageW;        // image blocks: fixed display width (may enlarge)
+    // TERMINAL blocks: raw = pasted output including ANSI colour codes, text = the visible text derived from it
+    String raw = "";
+    String preset = "Windows cmd";
+    String chrome = "NONE";
+    String title = "";
+    Color[] palette;      // null = the scheme's 16 colours
+    String theme = "DARK";   // DARK / LIGHT variant of the scheme
+    boolean cmdStyle = true;     // draw the command after a prompt apart from its output
+    boolean indentColors = true; // colour output lines by indentation level
+    Color[] accents;      // {command, indent 1, indent 2, indent 3}; null = the scheme's
+    boolean overlay;      // freehand drawing layer: sits at the canvas origin, takes no space in the flow
+    List<List<String>> rows = new ArrayList<>(); // TABLE blocks: row 0 is the header
     // filters (REQUEST / RESPONSE only)
     boolean incFirst = true, incHeaders = true, incBody = true, pretty;
     int maxBodyChars;
@@ -111,6 +139,57 @@ final class Block {
         return b;
     }
 
+    private static String monoFamily() {
+        java.util.Set<String> have = new java.util.HashSet<>(java.util.Arrays.asList(FontSpec.allFamilies()));
+        for (String f : new String[]{"Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono"}) if (have.contains(f)) return f;
+        return "Monospaced";
+    }
+
+    /** A terminal window look-alike: pasted output (ANSI colours honoured) in a chosen colour scheme. */
+    static Block terminal(String presetName, Settings st) {
+        Term.Preset p = Term.preset(presetName);
+        Term.Look lk = "LIGHT".equals(p.defaultTheme) ? p.light : p.dark;
+        Block b = new Block();
+        b.kind = Kind.TERMINAL;
+        b.theme = p.defaultTheme;
+        b.label = "Terminal";
+        b.showLabel = false;
+        b.highlight = false;
+        b.preset = p.name;
+        b.chrome = p.chrome;
+        b.title = p.title;
+        b.background = lk.bg;
+        b.raw = p.sample;
+        b.text = Term.strip(p.sample);
+        b.bodyFont = new FontSpec(monoFamily(), Math.max(12, st.bodyFont.size), false, false, lk.fg);
+        b.wrapCols = st.wrapCols;
+        b.maxLines = 0;
+        b.wrap = st.wrap;
+        return b;
+    }
+
+    static Block table(String label, List<List<String>> rows, Settings st) {
+        Block b = new Block();
+        b.kind = Kind.TABLE;
+        b.label = label;
+        b.showLabel = false;
+        b.highlight = false;
+        b.wrapCols = st.wrapCols;
+        b.wrap = st.wrap;
+        b.bodyFont = new FontSpec("Segoe UI", Math.max(10, st.bodyFont.size), false, false, new Color(20, 20, 20));
+        for (List<String> r : rows) b.rows.add(new ArrayList<>(r));
+        return b;
+    }
+
+    /** The freehand drawing layer: a transparent image that sits on top at the canvas origin. */
+    static Block drawing(BufferedImage img, double width1x) {
+        Block b = image(img);
+        b.overlay = true;
+        b.label = "Drawing";
+        b.imageW = width1x;
+        return b;
+    }
+
     static Block image(BufferedImage img) {
         Block b = new Block();
         b.kind = Kind.IMAGE;
@@ -119,6 +198,27 @@ final class Block {
         b.align = 1;
         b.label = "Image";
         return b;
+    }
+
+    /** Table anchors: "\u0001b:r0:c0:r1:c1" is a block of cells; any other text matches the first cell containing it. */
+    static String cellAnchor(int r0, int c0, int r1, int c1) {
+        return "\u0001b:" + Math.min(r0, r1) + ":" + Math.min(c0, c1) + ":" + Math.max(r0, r1) + ":" + Math.max(c0, c1);
+    }
+
+    /** Is the annotation's anchor still resolvable in this block? */
+    boolean hasAnchor(Annotation a) {
+        if (a.free) return true;
+        if (kind != Kind.TABLE) return text.contains(a.anchor);
+        if (a.anchor.startsWith("\u0001b:")) {
+            try {
+                String[] p = a.anchor.substring(3).split(":");
+                return Integer.parseInt(p[0]) < rows.size() && Integer.parseInt(p[1]) >= 0;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        }
+        for (List<String> r : rows) for (String c : r) if (c.contains(a.anchor)) return true;
+        return false;
     }
 
     boolean isHttp() {
@@ -132,7 +232,10 @@ final class Block {
         b.bodyFont = bodyFont == null ? null : bodyFont.copy();
         b.background = background; b.highlight = highlight; b.align = align;
         b.original = original; b.text = text; b.image = image; b.imageMaxWidth = imageMaxWidth;
-        b.offX = offX; b.offY = offY; b.boxW = boxW; b.imageW = imageW;
+        b.offX = offX; b.offY = offY; b.boxW = boxW; b.imageW = imageW; b.overlay = overlay;
+        b.raw = raw; b.preset = preset; b.chrome = chrome; b.title = title; b.palette = palette == null ? null : palette.clone();
+        b.theme = theme; b.cmdStyle = cmdStyle; b.indentColors = indentColors; b.accents = accents == null ? null : accents.clone();
+        for (List<String> r : rows) b.rows.add(new ArrayList<>(r));
         b.incFirst = incFirst; b.incHeaders = incHeaders; b.incBody = incBody; b.pretty = pretty;
         b.maxBodyChars = maxBodyChars; b.hiddenHeaders.addAll(hiddenHeaders); b.hiddenParams.addAll(hiddenParams);
         b.wrapCols = wrapCols; b.maxLines = maxLines; b.wrap = wrap;
@@ -143,6 +246,7 @@ final class Block {
             c.angle = a.angle; c.length = a.length; c.headSize = a.headSize; c.edge = a.edge; c.dx = a.dx; c.dy = a.dy;
             c.offL = a.offL; c.offT = a.offT; c.offR = a.offR; c.offB = a.offB;
             c.strength = a.strength;
+            c.free = a.free; c.fx = a.fx; c.fy = a.fy; c.fw = a.fw; c.fh = a.fh;
             b.annotations.add(c);
         }
         return b;
@@ -164,6 +268,19 @@ final class Block {
         String n = norm();
         int sp = n.indexOf("\n\n");
         return sp < 0 ? "" : n.substring(sp + 2);
+    }
+
+    private static final java.util.regex.Pattern HEADISH = java.util.regex.Pattern.compile("^(HTTP/\\d|[A-Z]+ \\S+ HTTP/|[A-Za-z0-9!#$%&'*+.^_`|~-]+:)");
+
+    /**
+     * Splits (possibly hand-edited) message text into {head, body}. The head ends at the first blank line; text without a blank line
+     * is the head if it starts like one (request / status line or a header), otherwise it is all body.
+     */
+    static String[] splitBody(String text) {
+        int i = text.indexOf("\n\n");
+        if (i >= 0) return new String[]{text.substring(0, i), text.substring(i + 2)};
+        if (HEADISH.matcher(text).find()) return new String[]{text, ""};
+        return new String[]{"", text};
     }
 
     /** The message body (as captured, before filters / edits). */
@@ -298,6 +415,30 @@ final class Json {
                     break;
                 default:
                     o.append(c);
+            }
+        }
+        return o.toString();
+    }
+
+    /** Removes the whitespace outside strings (the opposite of {@link #pretty}); other text is kept as typed. */
+    static String compact(String s) {
+        StringBuilder o = new StringBuilder();
+        boolean inStr = false, esc = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inStr) {
+                o.append(c);
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+            } else if (c == '"') {
+                inStr = true;
+                o.append(c);
+            } else if (!Character.isWhitespace(c)) {
+                o.append(c);
+            } else if (o.length() > 0 && Character.isLetterOrDigit(o.charAt(o.length() - 1))
+                    && i + 1 < s.length() && Character.isLetterOrDigit(s.charAt(i + 1))) {
+                o.append(' '); // keep words apart, e.g. a placeholder next to a literal
             }
         }
         return o.toString();

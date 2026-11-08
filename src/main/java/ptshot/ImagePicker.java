@@ -81,6 +81,10 @@ final class SelectPanel extends JPanel implements Scrollable {
         firePropertyChange("selection", null, sel);
     }
 
+    Rectangle selRect() {
+        return hasSelection() ? new Rectangle(sel) : null;
+    }
+
     boolean hasSelection() {
         return sel != null && sel.width >= 3 && sel.height >= 3;
     }
@@ -165,6 +169,126 @@ final class SelectPanel extends JPanel implements Scrollable {
 
 final class ImagePicker {
     private ImagePicker() {}
+
+    /** Result of {@link #edit}: the edited pixels plus where the top-left corner of the result lies in the original. */
+    static final class Edited {
+        final BufferedImage img;
+        final int dx, dy;
+
+        Edited(BufferedImage img, int dx, int dy) {
+            this.img = img;
+            this.dx = dx;
+            this.dy = dy;
+        }
+    }
+
+    private static BufferedImage argb(BufferedImage src) {
+        BufferedImage o = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = o.createGraphics();
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return o;
+    }
+
+    /** Crop / cut-out dialog: select a region, then keep it (Crop) or make it transparent (Cut out). null = nothing changed. */
+    static Edited edit(Window owner, String title, BufferedImage src) {
+        final BufferedImage[] cur = {argb(src)};
+        final int[] org = {0, 0};
+        final boolean[] changed = {false};
+        final java.util.ArrayDeque<Object[]> hist = new java.util.ArrayDeque<>();
+        final Edited[] result = new Edited[1];
+        JDialog d = new JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL);
+        SelectPanel sp = new SelectPanel();
+        sp.setImage(cur[0]);
+        JLabel info = new JLabel(" ");
+        JButton crop = new JButton("Crop to selection");
+        JButton cut = new JButton("Cut out selection");
+        JButton undo = new JButton("Undo");
+        JButton done = new JButton("Done");
+        JButton cancel = new JButton("Cancel");
+        crop.setToolTipText("Keep only the selected region");
+        cut.setToolTipText("Erase the selected region (it becomes transparent)");
+        crop.setEnabled(false);
+        cut.setEnabled(false);
+        undo.setEnabled(false);
+        sp.addPropertyChangeListener("selection", e -> {
+            crop.setEnabled(sp.hasSelection());
+            cut.setEnabled(sp.hasSelection());
+        });
+        Runnable refresh = () -> {
+            sp.setImage(cur[0]);
+            crop.setEnabled(false);
+            cut.setEnabled(false);
+            undo.setEnabled(!hist.isEmpty());
+            info.setText("  " + cur[0].getWidth() + " x " + cur[0].getHeight() + " px");
+        };
+        crop.addActionListener(e -> {
+            Rectangle r = sp.selRect();
+            if (r == null) return;
+            hist.push(new Object[]{cur[0], org[0], org[1]});
+            BufferedImage sub = new BufferedImage(r.width, r.height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = sub.createGraphics();
+            g.drawImage(cur[0], -r.x, -r.y, null);
+            g.dispose();
+            org[0] += r.x;
+            org[1] += r.y;
+            cur[0] = sub;
+            changed[0] = true;
+            refresh.run();
+        });
+        cut.addActionListener(e -> {
+            Rectangle r = sp.selRect();
+            if (r == null) return;
+            hist.push(new Object[]{cur[0], org[0], org[1]});
+            BufferedImage n = argb(cur[0]);
+            Graphics2D g = n.createGraphics();
+            g.setComposite(java.awt.AlphaComposite.Clear);
+            g.fillRect(r.x, r.y, r.width, r.height);
+            g.dispose();
+            cur[0] = n;
+            changed[0] = true;
+            refresh.run();
+        });
+        undo.addActionListener(e -> {
+            if (hist.isEmpty()) return;
+            Object[] h = hist.pop();
+            cur[0] = (BufferedImage) h[0];
+            org[0] = (Integer) h[1];
+            org[1] = (Integer) h[2];
+            changed[0] = !hist.isEmpty();
+            refresh.run();
+        });
+        done.addActionListener(e -> {
+            if (changed[0]) result[0] = new Edited(cur[0], org[0], org[1]);
+            d.dispose();
+        });
+        cancel.addActionListener(e -> d.dispose());
+        JComboBox<String> zoom = new JComboBox<>(new String[]{"Fit", "50%", "100%", "200%"});
+        zoom.addActionListener(e -> {
+            String z = (String) zoom.getSelectedItem();
+            sp.setZoom(z.equals("Fit") ? 0 : Integer.parseInt(z.replace("%", "")) / 100.0);
+        });
+        JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        top.add(new JLabel("Zoom"));
+        top.add(zoom);
+        top.add(new JLabel("   Drag a rectangle, then:"));
+        top.add(crop);
+        top.add(cut);
+        top.add(undo);
+        top.add(info);
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
+        bottom.add(done);
+        bottom.add(cancel);
+        d.getContentPane().add(top, BorderLayout.NORTH);
+        d.getContentPane().add(new JScrollPane(sp), BorderLayout.CENTER);
+        d.getContentPane().add(bottom, BorderLayout.SOUTH);
+        Dimension scr = Toolkit.getDefaultToolkit().getScreenSize();
+        d.setSize(Math.min(1200, (int) (scr.width * 0.85)), Math.min(800, (int) (scr.height * 0.85)));
+        d.setLocationRelativeTo(owner);
+        refresh.run();
+        d.setVisible(true);
+        return result[0];
+    }
 
     /**
      * @param rerender optional: renders the source at a given width (HTML mode); null for a plain image.

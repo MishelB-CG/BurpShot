@@ -7,6 +7,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.awt.Toolkit;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
@@ -64,6 +65,7 @@ final class CapturePanel extends JPanel {
     private double scale;
     private int maxWidth;
     private BufferedImage last;
+    private Renderer.Result lastRes;
     private final javax.swing.Timer timer;
     private final JLabel status = new JLabel(" ");
     private JTabbedPane tabs;
@@ -86,6 +88,11 @@ final class CapturePanel extends JPanel {
     // content tab
     private JCheckBox incFirst, incHeaders, incBody;
     private javax.swing.JToggleButton viewPretty, viewRaw, filtersBtn;
+    private TableEditor tableEd;
+    private SearchBar search;
+    private TerminalBar termBar;
+    private java.awt.CardLayout cards;
+    private JPanel centerCards;
     private JLabel filterSummary;
     private Checklist hdrList, parList;
     private JSpinner maxBody;
@@ -163,8 +170,33 @@ final class CapturePanel extends JPanel {
             public void pickedBlock(Block b) {
                 if (b != cur) list.setSelectedValue(b, true);
             }
+
+            public void stroke(PaintTool t, java.util.List<java.awt.geom.Point2D> pts) {
+                paintStroke(t, pts);
+            }
+
+            public void fill(double x1x, double y1x) {
+                bucketFill(x1x, y1x);
+            }
+
+            public void marqueeDelete(Rectangle dev) {
+                eraseRegion(dev);
+            }
+
+            public void marqueeCrop(Rectangle dev) {
+                cropRegion(dev);
+            }
+
+            public void deleteBlock(Block b) {
+                deleteLayer(b);
+            }
+
+            public void contextMenu(Component invoker, int x, int y, Annotation an, Block layer, java.awt.geom.Point2D at1x) {
+                previewMenu(invoker, x, y, an, layer, at1x);
+            }
         });
         installUndoKeys();
+        installFindKey();
         list.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) select(list.getSelectedValue());
         });
@@ -233,7 +265,7 @@ final class CapturePanel extends JPanel {
             vg.add(t);
             t.setFocusable(false);
             t.setMargin(new java.awt.Insets(5, 14, 5, 14));
-            t.addActionListener(e -> filtersChanged());
+            t.addActionListener(e -> viewChanged());
         }
         viewPretty.setToolTipText("Re-indent JSON / XML / HTML bodies (like Burp's Pretty view)");
         viewRaw.setToolTipText("Show the body exactly as captured");
@@ -302,8 +334,13 @@ final class CapturePanel extends JPanel {
         });
         ta.getDocument().addDocumentListener(new DocumentListener() {
             void ch() {
-                if (loading || cur == null || cur.kind == Block.Kind.IMAGE) return;
-                cur.text = ta.getText();
+                if (loading || cur == null || cur.kind == Block.Kind.IMAGE || cur.kind == Block.Kind.TABLE) return;
+                if (cur.kind == Block.Kind.TERMINAL) {
+                    cur.raw = Term.unshow(ta.getText());
+                    cur.text = Term.strip(cur.raw);
+                } else {
+                    cur.text = ta.getText();
+                }
                 annList.repaint();
                 refresh();
             }
@@ -321,26 +358,48 @@ final class CapturePanel extends JPanel {
             }
         });
 
-        // one slim toolbar, acting on the text selected in the box above:  [annotate icons] | Edit text v | Add image v
-        JPanel south = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 2));
-        south.add(new JLabel("Select text, then:"));
-        south.add(iconBtn(Icons.box(), "Box - red rectangle around the selected text", e -> addAnn(Annotation.Type.BOX)));
-        south.add(iconBtn(Icons.arrow(), "Arrow - starts at the selected text", e -> addAnn(Annotation.Type.ARROW)));
-        south.add(iconBtn(Icons.pixelate(), "Pixelate the selected text", e -> addAnn(Annotation.Type.PIXELATE)));
-        south.add(iconBtn(Icons.blur(), "Blur the selected text", e -> addAnn(Annotation.Type.BLUR)));
-        south.add(menuBtn("Edit text", Icons.lines(), "Shorten or remove parts of the text",
-                item("Replace selection with ...", "Replace the selected text with ...", e -> replaceSel()),
-                item("Keep selection, ... the rest of the line", "Keep the header name and the selection, replace the rest of the line with ...", e -> ellipsizeOutside()),
-                null,
-                item("Delete line(s)", "Delete the selected line(s)", e -> lineOp(0)),
-                item("Collapse line(s) to ...", "Replace the selected line(s) with a single ... line", e -> lineOp(1)),
-                item("Keep only selected line(s)", "Keep only the selected line(s), collapse the rest into ...", e -> lineOp(2))));
-        south.add(menuBtn("Render", Icons.picture(), "Add a rendered HTML page or a screen capture as an image block",
-                item("Render HTML (selection / body / pasted)...", "Render HTML code and pick a region to add as an image block", e -> renderHtmlAction()),
-                item("Capture screen region...", "Grab the screen after a delay (e.g. Burp's Render tab) and pick a region", e -> screenAction())));
+        search = new SearchBar(ta, this::jumpLayer);
+        tableEd = new TableEditor(() -> {
+            annList.repaint();
+            refresh();
+        });
+        cards = new java.awt.CardLayout();
+        centerCards = new JPanel(cards);
+        centerCards.add(new JScrollPane(ta), "text");
+        centerCards.add(tableEd, "table");
+        java.awt.event.MouseAdapter pop = new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                maybePopup(e);
+            }
 
-        p.add(filterPanel, BorderLayout.NORTH);
-        p.add(new JScrollPane(ta), BorderLayout.CENTER);
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                maybePopup(e);
+            }
+        };
+        ta.addMouseListener(pop);
+        tableEd.table().addMouseListener(pop);
+        JLabel tip = new JLabel("Select text (or table cells), then right-click for elements and edit actions");
+        tip.setFont(tip.getFont().deriveFont(Font.ITALIC));
+        tip.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4));
+
+        termBar = new TerminalBar(() -> {
+            if (cur != null) loadStyle(cur);
+            annList.repaint();
+            refresh();
+        });
+        termBar.setVisible(false);
+        JPanel north = new JPanel();
+        north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+        north.add(filterPanel);
+        north.add(termBar);
+        p.add(north, BorderLayout.NORTH);
+        p.add(centerCards, BorderLayout.CENTER);
+        JPanel south = new JPanel();
+        south.setLayout(new BoxLayout(south, BoxLayout.Y_AXIS));
+        south.add(search);
+        south.add(tip);
         p.add(south, BorderLayout.SOUTH);
         return p;
     }
@@ -352,8 +411,8 @@ final class CapturePanel extends JPanel {
             public Component getListCellRendererComponent(JList<?> l, Object v, int i, boolean sel, boolean foc) {
                 JLabel c = (JLabel) super.getListCellRendererComponent(l, v, i, sel, foc);
                 Annotation a = (Annotation) v;
-                if (cur != null && !cur.text.contains(a.anchor)) {
-                    c.setText(c.getText() + "   (text not found - hidden)");
+                if (cur != null && !cur.hasAnchor(a)) {
+                    c.setText(c.getText() + "   (target not found - hidden)");
                     if (!sel) c.setForeground(Color.GRAY);
                 }
                 return c;
@@ -426,7 +485,7 @@ final class CapturePanel extends JPanel {
         beside.addActionListener(e -> styleChanged());
         sepAfter.addActionListener(e -> styleChanged());
         wrap.addActionListener(e -> styleChanged());
-        align.addActionListener(e -> styleChanged());
+        align.addActionListener(e -> alignChosen());
         for (JSpinner s : new JSpinner[]{sepWidth, wrapCols, maxLines, imgMax}) s.addChangeListener(e -> styleChanged());
         labelField.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) {
@@ -504,16 +563,461 @@ final class CapturePanel extends JPanel {
         row2.add(scaleSpin);
         row2.add(new JLabel("Max width (px, 0 = off)"));
         row2.add(widthSpin);
-        row2.add(new JLabel("  Click an annotation or a whole block in the preview to move / resize it"));
         bar.add(row1);
         bar.add(row2);
+        bar.add(buildToolOptions());
         JPanel south = new JPanel(new BorderLayout());
         south.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 6));
         south.add(status);
         p.add(bar, BorderLayout.NORTH);
         p.add(new JScrollPane(preview), BorderLayout.CENTER);
+        p.add(buildPalette(), BorderLayout.WEST);
         p.add(south, BorderLayout.SOUTH);
         return p;
+    }
+
+    // ================================================================== tool palette (left of the preview)
+
+    private PaintTool tool = PaintTool.SELECT;
+    private ColorButton penColorBtn;
+    private JSpinner penSizeSpin, penOpacitySpin, tolSpin;
+    private JPanel optBar;
+    private JLabel optHint;
+    private final java.util.EnumMap<PaintTool, Integer> toolSize = new java.util.EnumMap<>(PaintTool.class);
+
+    private JPanel buildToolOptions() {
+        optBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        penColorBtn = new ColorButton(new Color(220, 30, 30), this::penChanged);
+        penSizeSpin = ispin(4, 1, 200, 1);
+        penOpacitySpin = ispin(100, 5, 100, 5);
+        tolSpin = ispin(16, 0, 100, 2);
+        penSizeSpin.addChangeListener(e -> penChanged());
+        penOpacitySpin.addChangeListener(e -> penChanged());
+        optHint = new JLabel(" ");
+        optHint.setFont(optHint.getFont().deriveFont(Font.ITALIC));
+        toolSize.put(PaintTool.PENCIL, 2);
+        toolSize.put(PaintTool.BRUSH, 14);
+        toolSize.put(PaintTool.ERASER, 18);
+        updateToolOptions();
+        return optBar;
+    }
+
+    private void updateToolOptions() {
+        optBar.removeAll();
+        boolean paint = tool == PaintTool.PENCIL || tool == PaintTool.BRUSH || tool == PaintTool.BUCKET;
+        if (paint) {
+            optBar.add(new JLabel("Colour"));
+            optBar.add(penColorBtn);
+        }
+        if (tool == PaintTool.PENCIL || tool == PaintTool.BRUSH || tool == PaintTool.ERASER) {
+            optBar.add(new JLabel("Size"));
+            optBar.add(penSizeSpin);
+        }
+        if (tool == PaintTool.BRUSH) {
+            optBar.add(new JLabel("Opacity %"));
+            optBar.add(penOpacitySpin);
+        }
+        if (tool == PaintTool.BUCKET) {
+            optBar.add(new JLabel("Tolerance"));
+            optBar.add(tolSpin);
+        }
+        String h;
+        switch (tool) {
+            case SELECT: h = "Click an annotation or a whole layer to move / resize it. Arrow keys nudge."; break;
+            case MARQUEE: h = "Drag a rectangle. Del erases it from the selected image layer, Enter crops the layer to it, Esc clears."; break;
+            case PENCIL: h = "Freehand line on the Drawing layer."; break;
+            case BRUSH: h = "Soft, semi-transparent stroke on the Drawing layer."; break;
+            case BUCKET: h = "Fill the clicked area (looks at everything you see) on the Drawing layer."; break;
+            default: h = "Erase parts of the Drawing layer.";
+        }
+        optHint.setText("  " + h);
+        optBar.add(optHint);
+        optBar.revalidate();
+        optBar.repaint();
+    }
+
+    private void penChanged() {
+        if (tool == PaintTool.PENCIL || tool == PaintTool.BRUSH || tool == PaintTool.ERASER) toolSize.put(tool, ival(penSizeSpin));
+        preview.setPen(penColorBtn.get(), tool == PaintTool.BUCKET ? 1 : ival(penSizeSpin), tool == PaintTool.BRUSH ? ival(penOpacitySpin) / 100f : 1f);
+    }
+
+    private void setTool(PaintTool t) {
+        tool = t;
+        if (toolSize.containsKey(t)) penSizeSpin.setValue(toolSize.get(t));
+        preview.setTool(t);
+        penChanged();
+        updateToolOptions();
+    }
+
+    private JPanel buildPalette() {
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 2));
+        javax.swing.ButtonGroup g = new javax.swing.ButtonGroup();
+        Object[][] tools = {
+                {Icons.select(), "Select / move  -  click an annotation or a layer, drag to move, handles to resize", PaintTool.SELECT},
+                {Icons.marquee(), "Rectangle selection  -  Del erases it from the selected image layer, Enter crops to it", PaintTool.MARQUEE},
+                {Icons.pencil(), "Pencil  -  thin hard freehand line", PaintTool.PENCIL},
+                {Icons.brush(), "Brush  -  soft semi-transparent stroke", PaintTool.BRUSH},
+                {Icons.bucket(), "Bucket fill  -  fill the clicked area", PaintTool.BUCKET},
+                {Icons.eraser(), "Eraser  -  erase parts of the Drawing layer", PaintTool.ERASER}};
+        for (Object[] t : tools) {
+            javax.swing.JToggleButton b = new javax.swing.JToggleButton((javax.swing.Icon) t[0], t[2] == PaintTool.SELECT);
+            b.setToolTipText((String) t[1]);
+            b.setFocusable(false);
+            b.setMargin(new java.awt.Insets(5, 5, 5, 5));
+            b.setMaximumSize(new Dimension(Short.MAX_VALUE, b.getPreferredSize().height));
+            b.addActionListener(e -> setTool((PaintTool) t[2]));
+            g.add(b);
+            p.add(b);
+        }
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(new javax.swing.JSeparator());
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(paletteBtn(Icons.box(), "Box  -  adds a red rectangle in the middle of the view; drag it into place", e -> addFree(Annotation.Type.BOX)));
+        p.add(paletteBtn(Icons.arrow(), "Arrow  -  adds an arrow in the middle of the view; drag it into place", e -> addFree(Annotation.Type.ARROW)));
+        p.add(paletteBtn(Icons.pixelate(), "Pixelate  -  adds a pixelate area; drag / resize it over what to hide", e -> addFree(Annotation.Type.PIXELATE)));
+        p.add(paletteBtn(Icons.blur(), "Blur  -  adds a blur area; drag / resize it over what to hide", e -> addFree(Annotation.Type.BLUR)));
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(new javax.swing.JSeparator());
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(paletteBtn(Icons.text(), "Text layer  -  custom header, footer or note", e -> addCustom()));
+        JButton term = paletteBtn(Icons.terminal(), "Terminal layer  -  paste command output into a cmd / PowerShell / bash look-alike window", null);
+        term.addActionListener(e -> {
+            JPopupMenu m = new JPopupMenu();
+            for (String name : Term.presets().keySet()) m.add(item(name, "Add a terminal in this colour scheme", x -> addTerminal(name)));
+            m.show(term, term.getWidth(), 0);
+        });
+        p.add(term);
+        JButton tbl = paletteBtn(Icons.table(), "Table layer  -  imitation of a Burp table (Intruder, Proxy history, ...), fully editable", null);
+        tbl.addActionListener(e -> {
+            JPopupMenu m = new JPopupMenu();
+            for (String name : Templates.all().keySet()) m.add(item(name, "Add this table as a new layer", x -> addTable(name)));
+            m.show(tbl, tbl.getWidth(), 0);
+        });
+        p.add(tbl);
+        JButton img = paletteBtn(Icons.picture(), "Image layer  -  from a file, the clipboard, rendered HTML or a screen region", null);
+        img.addActionListener(e -> {
+            JPopupMenu m = new JPopupMenu();
+            m.add(item("From file...", "Add an image file as a layer", x -> addImageFromFile()));
+            m.add(item("From clipboard", "Add the image on the clipboard as a layer", x -> addImageFromClipboard()));
+            m.addSeparator();
+            m.add(item("Render HTML...", "Render HTML (selection, response body or pasted) and pick a region", x -> renderHtmlAction()));
+            m.add(item("Capture screen region...", "Grab the screen after a delay and pick a region", x -> screenAction()));
+            m.show(img, img.getWidth(), 0);
+        });
+        p.add(img);
+        p.add(paletteBtn(Icons.pick(), "Pick from Burp  -  point at any button, text or table in Burp and turn it into an editable layer", e -> pickFromBurp()));
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(new javax.swing.JSeparator());
+        p.add(javax.swing.Box.createVerticalStrut(6));
+        p.add(paletteBtn(Icons.crop(), "Crop / cut out parts of the selected layer", e -> cropLayer()));
+        p.add(javax.swing.Box.createVerticalGlue());
+        return p;
+    }
+
+    private JButton paletteBtn(javax.swing.Icon icon, String tip, java.awt.event.ActionListener l) {
+        JButton b = iconBtn(icon, tip, l == null ? e -> { } : l);
+        b.setMargin(new java.awt.Insets(5, 5, 5, 5));
+        b.setMaximumSize(new Dimension(Short.MAX_VALUE, b.getPreferredSize().height));
+        return b;
+    }
+
+    // ================================================================== drawing layer (pencil / brush / bucket / eraser)
+
+    private static BufferedImage copyArgb(BufferedImage src) {
+        BufferedImage o = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = o.createGraphics();
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return o;
+    }
+
+    private Block drawingLayer(boolean create) {
+        for (Block b : blocks()) if (b.overlay) return b;
+        if (!create || last == null) return null;
+        BufferedImage im = new BufferedImage(last.getWidth(), last.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Block b = Block.drawing(im, last.getWidth() / scale);
+        model.addElement(b);
+        return b;
+    }
+
+    /** The drawing image grows with the canvas so strokes can reach everywhere. */
+    private void ensureDrawingCovers(Block d) {
+        double ppx = d.image.getWidth() / d.imageW;
+        double needW = last.getWidth() / scale - d.offX, needH = last.getHeight() / scale - d.offY;
+        double haveW = d.imageW, haveH = d.image.getHeight() / ppx;
+        if (needW <= haveW + 0.5 && needH <= haveH + 0.5) return;
+        double nw = Math.max(needW, haveW), nh = Math.max(needH, haveH);
+        BufferedImage n = new BufferedImage((int) Math.ceil(nw * ppx), (int) Math.ceil(nh * ppx), BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = n.createGraphics();
+        g.drawImage(d.image, 0, 0, null);
+        g.dispose();
+        d.image = n;
+        d.imageW = n.getWidth() / ppx;
+    }
+
+    private void paintStroke(PaintTool t, java.util.List<java.awt.geom.Point2D> pts) {
+        if (pts.isEmpty() || last == null) return;
+        Block d = drawingLayer(t != PaintTool.ERASER);
+        if (d == null) {
+            status.setText("Nothing to erase - the Drawing layer is empty.");
+            return;
+        }
+        ensureDrawingCovers(d);
+        double ppx = d.image.getWidth() / d.imageW;
+        BufferedImage ni = copyArgb(d.image);
+        java.awt.Graphics2D g = ni.createGraphics();
+        boolean hard = t == PaintTool.PENCIL;
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, hard ? java.awt.RenderingHints.VALUE_ANTIALIAS_OFF : java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        float w = (float) Math.max(1.0, ival(penSizeSpin) * ppx);
+        if (t == PaintTool.ERASER) g.setComposite(java.awt.AlphaComposite.Clear);
+        else g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, t == PaintTool.BRUSH ? ival(penOpacitySpin) / 100f : 1f));
+        g.setColor(penColorBtn.get());
+        g.setStroke(new java.awt.BasicStroke(w, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+        java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+        for (int i = 0; i < pts.size(); i++) {
+            double x = (pts.get(i).getX() - d.offX) * ppx, y = (pts.get(i).getY() - d.offY) * ppx;
+            if (i == 0) path.moveTo(x, y);
+            else path.lineTo(x, y);
+        }
+        if (pts.size() == 1) g.fill(new java.awt.geom.Ellipse2D.Double((pts.get(0).getX() - d.offX) * ppx - w / 2, (pts.get(0).getY() - d.offY) * ppx - w / 2, w, w));
+        else g.draw(path);
+        g.dispose();
+        d.image = ni;
+        renderNow();
+        onChanged.run();
+    }
+
+    private void bucketFill(double x1x, double y1x) {
+        if (last == null) return;
+        int W = last.getWidth(), H = last.getHeight();
+        int sx = Math.max(0, Math.min(W - 1, (int) Math.round(x1x * scale))), sy = Math.max(0, Math.min(H - 1, (int) Math.round(y1x * scale)));
+        int[] px = last.getRGB(0, 0, W, H, null, 0, W);
+        int seed = px[sy * W + sx];
+        double max = ival(tolSpin) / 100.0 * 441.67;
+        boolean[] mask = new boolean[W * H];
+        int[] queue = new int[W * H];
+        int qh = 0, qt = 0;
+        queue[qt++] = sy * W + sx;
+        mask[sy * W + sx] = true;
+        int sr = (seed >> 16) & 255, sg = (seed >> 8) & 255, sb = seed & 255;
+        while (qh < qt) {
+            int cur = queue[qh++], cx = cur % W, cy = cur / W;
+            int[] nb = {cx > 0 ? cur - 1 : -1, cx < W - 1 ? cur + 1 : -1, cy > 0 ? cur - W : -1, cy < H - 1 ? cur + W : -1};
+            for (int n : nb) {
+                if (n < 0 || mask[n]) continue;
+                int c = px[n];
+                int dr = ((c >> 16) & 255) - sr, dg = ((c >> 8) & 255) - sg, db = (c & 255) - sb;
+                if (Math.sqrt(dr * dr + dg * dg + db * db) <= max) {
+                    mask[n] = true;
+                    queue[qt++] = n;
+                }
+            }
+        }
+        // grow by one pixel so anti-aliased edges are covered too
+        boolean[] grown = mask.clone();
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+            if (!mask[y * W + x]) continue;
+            if (x > 0) grown[y * W + x - 1] = true;
+            if (x < W - 1) grown[y * W + x + 1] = true;
+            if (y > 0) grown[(y - 1) * W + x] = true;
+            if (y < H - 1) grown[(y + 1) * W + x] = true;
+        }
+        int col = penColorBtn.get().getRGB() | 0xff000000;
+        BufferedImage m = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
+        int[] mp = new int[W * H];
+        for (int i = 0; i < mp.length; i++) mp[i] = grown[i] ? col : 0;
+        m.setRGB(0, 0, W, H, mp, 0, W);
+        Block d = drawingLayer(true);
+        ensureDrawingCovers(d);
+        double ppx = d.image.getWidth() / d.imageW;
+        BufferedImage ni = copyArgb(d.image);
+        java.awt.Graphics2D g = ni.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        java.awt.geom.AffineTransform at = new java.awt.geom.AffineTransform();
+        at.translate(-d.offX * ppx, -d.offY * ppx);
+        at.scale(ppx / scale, ppx / scale);
+        g.drawImage(m, at, null);
+        g.dispose();
+        d.image = ni;
+        renderNow();
+        onChanged.run();
+    }
+
+    // ================================================================== selection: erase / crop
+
+    private Renderer.Layer layerOfBlock(Block b) {
+        if (lastRes == null) return null;
+        for (Renderer.Layer l : lastRes.layers) if (l.block == b) return l;
+        return null;
+    }
+
+    /** The image layer the selection tools act on, or null (with a hint) if the selected layer is not an image. */
+    private Block imageTarget() {
+        if (cur != null && cur.kind == Block.Kind.IMAGE && cur.image != null) return cur;
+        status.setText("Select an image layer (or the Drawing layer) first. Text layers can be converted with Crop / cut out (it offers to turn them into an image).");
+        return null;
+    }
+
+    private void eraseRegion(Rectangle dev) {
+        Block b = imageTarget();
+        Renderer.Layer l = b == null ? null : layerOfBlock(b);
+        if (l == null) return;
+        Rectangle r = dev.intersection(l.body);
+        if (r.isEmpty()) {
+            status.setText("The selection does not touch the selected layer.");
+            return;
+        }
+        double kx = b.image.getWidth() / (double) l.body.width, ky = b.image.getHeight() / (double) l.body.height;
+        BufferedImage ni = copyArgb(b.image);
+        java.awt.Graphics2D g = ni.createGraphics();
+        g.setComposite(java.awt.AlphaComposite.Clear);
+        g.fillRect((int) Math.floor((r.x - l.body.x) * kx), (int) Math.floor((r.y - l.body.y) * ky), (int) Math.ceil(r.width * kx) + 1, (int) Math.ceil(r.height * ky) + 1);
+        g.dispose();
+        b.image = ni;
+        commitHistory();
+        renderNow();
+        commitHistory();
+        onChanged.run();
+        status.setText("Erased the selected area from the layer.");
+    }
+
+    private void cropRegion(Rectangle dev) {
+        Block b = imageTarget();
+        Renderer.Layer l = b == null ? null : layerOfBlock(b);
+        if (l == null) return;
+        if (b.overlay) {
+            status.setText("The Drawing layer cannot be cropped - use Del to erase parts of it.");
+            return;
+        }
+        Rectangle r = dev.intersection(l.body);
+        if (r.width < 3 || r.height < 3) {
+            status.setText("The selection does not touch the selected layer.");
+            return;
+        }
+        double kx = b.image.getWidth() / (double) l.body.width, ky = b.image.getHeight() / (double) l.body.height;
+        int ix = (int) Math.floor((r.x - l.body.x) * kx), iy = (int) Math.floor((r.y - l.body.y) * ky);
+        int iw = Math.min(b.image.getWidth() - ix, (int) Math.ceil(r.width * kx)), ih = Math.min(b.image.getHeight() - iy, (int) Math.ceil(r.height * ky));
+        BufferedImage ni = new BufferedImage(Math.max(1, iw), Math.max(1, ih), BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = ni.createGraphics();
+        g.drawImage(b.image, -ix, -iy, null);
+        g.dispose();
+        commitHistory();
+        b.offX += (r.x - l.body.x) / scale;
+        b.offY += (r.y - l.body.y) / scale;
+        b.imageW = r.width / scale;
+        b.image = ni;
+        renderNow();
+        commitHistory();
+        preview.clearMarquee();
+        onChanged.run();
+        status.setText("Cropped the layer to the selection.");
+    }
+
+    /** A pixel image of one layer on its own (labels and its own annotations included, no outer margin). */
+    private BufferedImage rasterize(Block b) {
+        Block t = b.duplicate();
+        t.beside = false;
+        t.separatorAfter = false;
+        t.offX = t.offY = 0;
+        t.annotations.removeIf(a -> a.free);
+        BufferedImage im = Renderer.render(java.util.Collections.singletonList(t), st, scale, maxWidth);
+        int m = (int) Math.round(st.margin * scale);
+        int w = Math.max(1, im.getWidth() - 2 * m), h = Math.max(1, im.getHeight() - 2 * m);
+        BufferedImage o = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = o.createGraphics();
+        g.drawImage(im, -m, -m, null);
+        g.dispose();
+        return o;
+    }
+
+    /** Crop button: opens the crop / cut-out dialog for the selected layer. */
+    private void cropLayer() {
+        if (cur == null) {
+            status.setText("Select a layer first.");
+            return;
+        }
+        java.awt.Window w = SwingUtilities.getWindowAncestor(this);
+        if (cur.kind == Block.Kind.IMAGE && cur.image != null) {
+            Renderer.Layer l = layerOfBlock(cur);
+            double disp1x = l == null ? cur.image.getWidth() / scale : l.body.width / scale;
+            ImagePicker.Edited ed = ImagePicker.edit(w, "Crop / cut out - " + cur.label, cur.image);
+            if (ed == null) return;
+            commitHistory();
+            double k = disp1x / cur.image.getWidth();
+            cur.offX += ed.dx * k;
+            cur.offY += ed.dy * k;
+            cur.imageW = ed.img.getWidth() * k;
+            cur.image = ed.img;
+            renderNow();
+            commitHistory();
+            onChanged.run();
+            return;
+        }
+        int choice = JOptionPane.showOptionDialog(w, "This layer is text, so cropping turns it into an image\n(the text can no longer be edited afterwards).",
+                "Crop layer", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null,
+                new Object[]{"Replace the layer", "Add as a new image layer", "Cancel"}, "Add as a new image layer");
+        if (choice != 0 && choice != 1) return;
+        BufferedImage ras = rasterize(cur);
+        ImagePicker.Edited ed = ImagePicker.edit(w, "Crop / cut out - " + cur.label, ras);
+        BufferedImage fin = ed == null ? null : ed.img;
+        if (fin == null) return;
+        commitHistory();
+        Block nb = Block.image(fin);
+        nb.imageW = fin.getWidth() / scale;
+        nb.offX = cur.offX + ed.dx / scale;
+        nb.offY = cur.offY + ed.dy / scale;
+        nb.label = cur.label;
+        int at = model.indexOf(cur);
+        if (choice == 0) {
+            nb.beside = cur.beside;
+            nb.separatorAfter = cur.separatorAfter;
+            model.set(at, nb);
+        } else {
+            model.add(at + 1, nb);
+        }
+        list.setSelectedValue(nb, true);
+        renderNow();
+        commitHistory();
+        onChanged.run();
+    }
+
+    // ================================================================== pick from Burp
+
+    private void pickFromBurp() {
+        status.setText("Click any element in Burp to pick it. Ctrl+click = use the UI (switch tabs, open menus), mouse wheel = parent / child, Esc = cancel.");
+        UiPicker.pick(c -> {
+            UiPicker.Picked pk = UiPicker.inspect(c);
+            java.util.List<String> opts = new ArrayList<>();
+            if (pk.table != null) opts.add("Editable table");
+            if (pk.text != null) opts.add("Editable text");
+            opts.add("Image snapshot");
+            opts.add("Cancel");
+            String desc = c.getClass().getSimpleName() + " (" + c.getWidth() + " x " + c.getHeight() + ")";
+            int ch = JOptionPane.showOptionDialog(SwingUtilities.getWindowAncestor(this), "Picked: " + desc + "\nAdd it as:", "Pick from Burp",
+                    JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts.toArray(), opts.get(0));
+            if (ch < 0 || ch >= opts.size()) return;
+            String o = opts.get(ch);
+            if (o.equals("Editable table")) {
+                Block b = Block.table("Picked table", pk.table, st);
+                b.bodyFont = new FontSpec("Segoe UI", Math.max(10, pk.fontSize), false, false, new Color(20, 20, 20));
+                insert(b);
+                status.setText("Added the picked table (" + (pk.table.size() - 1) + " rows) - edit it in the Content tab.");
+            } else if (o.equals("Editable text")) {
+                Block b = Block.custom("Picked text", st);
+                b.showLabel = false;
+                b.text = pk.text;
+                insert(b);
+            } else if (o.equals("Image snapshot")) {
+                BufferedImage im = UiPicker.snapshot(c);
+                Block b = Block.image(im);
+                b.imageW = c.getWidth();
+                b.label = "Picked " + c.getClass().getSimpleName();
+                insert(b);
+                status.setText("Added a snapshot of the picked element (" + im.getWidth() + " x " + im.getHeight() + " px).");
+            }
+        }, () -> status.setText("Pick cancelled."));
     }
 
     // ================================================================== undo / redo
@@ -749,8 +1253,14 @@ final class CapturePanel extends JPanel {
             if (b != null) {
                 boolean http = b.isHttp(), img = b.kind == Block.Kind.IMAGE;
                 filterPanel.setVisible(http);
+                termBar.setVisible(b.kind == Block.Kind.TERMINAL);
+                if (b.kind == Block.Kind.TERMINAL) termBar.load(b);
                 ta.setEnabled(!img);
-                ta.setText(img ? "(image block - no text)" : b.text);
+                boolean tbl = b.kind == Block.Kind.TABLE;
+                cards.show(centerCards, tbl ? "table" : "text");
+                search.setVisible(!img && !tbl);
+                if (tbl) tableEd.load(b);
+                ta.setText(img ? "(image block - no text)" : b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.text);
                 ta.setCaretPosition(0);
                 incFirst.setSelected(b.incFirst);
                 incHeaders.setSelected(b.incHeaders);
@@ -803,6 +1313,15 @@ final class CapturePanel extends JPanel {
         loading = was;
     }
 
+    /** Left / Centre / Right are positions on the whole canvas: choosing one first drops any manual horizontal move. */
+    private void alignChosen() {
+        if (loading || cur == null) return;
+        commitHistory();
+        cur.align = align.getSelectedIndex();
+        cur.offX = 0;
+        styleChanged();
+    }
+
     private void styleChanged() {
         if (loading || cur == null) return;
         cur.showLabel = showLabel.isSelected();
@@ -821,6 +1340,29 @@ final class CapturePanel extends JPanel {
         cur.maxLines = ival(maxLines);
         cur.imageMaxWidth = ival(imgMax);
         list.repaint();
+        refresh();
+    }
+
+    /**
+     * Pretty / Raw: re-formats only the body of the text as it is now, so manual edits (deleted headers, removed lines,
+     * collapsed parts) survive the switch. Filters and "Reset text" still rebuild from the captured message.
+     */
+    private void viewChanged() {
+        if (loading || cur == null || !cur.isHttp()) return;
+        boolean toPretty = viewPretty.isSelected();
+        if (toPretty == cur.pretty) return;
+        cur.pretty = toPretty;
+        String ct = cur.headerValue("content-type");
+        String[] hb = Block.splitBody(ta.getText());
+        String body = hb[1];
+        if (!body.trim().isEmpty()) body = toPretty ? Pretty.format(body, ct) : Pretty.compact(body, ct);
+        String text = hb[0].isEmpty() ? body : body.isEmpty() ? hb[0] : hb[0] + "\n\n" + body;
+        cur.text = text;
+        loading = true;
+        ta.setText(text);
+        ta.setCaretPosition(0);
+        loading = false;
+        annList.repaint();
         refresh();
     }
 
@@ -917,7 +1459,7 @@ final class CapturePanel extends JPanel {
     // ================================================================== text operations
 
     private boolean needSelection() {
-        if (cur == null || cur.kind == Block.Kind.IMAGE) return true;
+        if (cur == null || cur.kind == Block.Kind.IMAGE || cur.kind == Block.Kind.TABLE) return true;
         if (ta.getSelectionStart() == ta.getSelectionEnd()) {
             status.setText("Select some text in the text box first.");
             return true;
@@ -949,7 +1491,7 @@ final class CapturePanel extends JPanel {
 
     /** mode 0 = delete, 1 = collapse into "...", 2 = keep only (collapse everything else). */
     private void lineOp(int mode) {
-        if (cur == null || cur.kind == Block.Kind.IMAGE) return;
+        if (cur == null || cur.kind == Block.Kind.IMAGE || cur.kind == Block.Kind.TABLE) return;
         String t = ta.getText();
         int s = ta.getSelectionStart(), e = ta.getSelectionEnd();
         int eEff = (e > s && e <= t.length() && t.charAt(e - 1) == '\n') ? e - 1 : e;
@@ -1028,14 +1570,17 @@ final class CapturePanel extends JPanel {
     // ================================================================== annotations
 
     private void addAnn(Annotation.Type type) {
+        if (cur != null && cur.kind == Block.Kind.TABLE) {
+            addTableAnn(type, false);
+            return;
+        }
         if (needSelection()) return;
-        String t = ta.getText();
-        int s = ta.getSelectionStart(), e = ta.getSelectionEnd();
-        String anchor = t.substring(s, e);
-        int occ = 0, idx = t.indexOf(anchor);
-        while (idx >= 0 && idx < s) {
-            occ++;
-            idx = t.indexOf(anchor, idx + 1);
+        Object[] sa = selAnchor();
+        String anchor = (String) sa[0];
+        int occ = (Integer) sa[1];
+        if (anchor.isEmpty()) {
+            status.setText("Select some visible text first.");
+            return;
         }
         Annotation a = Annotation.create(type, anchor, occ);
         cur.annotations.add(a);
@@ -1043,6 +1588,219 @@ final class CapturePanel extends JPanel {
         annList.setSelectedIndex(annModel.size() - 1);
         status.setText("Added " + type + " - tweak its style in the Annotations tab.");
         refresh();
+    }
+
+    /** {anchor text, occurrence} of the editor selection; terminal layers map it onto the visible (escape-free) text. */
+    private Object[] selAnchor() {
+        String t = ta.getText();
+        int s = ta.getSelectionStart(), e = ta.getSelectionEnd();
+        String anchor, hay;
+        int pos;
+        if (cur.kind == Block.Kind.TERMINAL) {
+            String raw = Term.unshow(t);
+            anchor = Term.strip(raw.substring(s, e));
+            hay = cur.text;
+            pos = Term.strip(raw.substring(0, s)).length();
+        } else {
+            anchor = t.substring(s, e);
+            hay = t;
+            pos = s;
+        }
+        int occ = 0, idx = anchor.isEmpty() ? -1 : hay.indexOf(anchor);
+        while (idx >= 0 && idx < pos) {
+            occ++;
+            idx = hay.indexOf(anchor, idx + 1);
+        }
+        return new Object[]{anchor, occ};
+    }
+
+    void addTerminal(String preset) {
+        Block b = Block.terminal(preset, st);
+        insert(b);
+        status.setText("Added a '" + preset + "' terminal - paste your command output into the Content tab (ANSI colours are kept).");
+    }
+
+    private void addTableAnn(Annotation.Type type, boolean wholeRows) {
+        int[] sel = tableEd.selection();
+        if (sel == null) {
+            status.setText("Select one or more table cells first.");
+            return;
+        }
+        int lastCol = Math.max(0, tableEd.table().getColumnCount() - 1);
+        String anchor = Block.cellAnchor(sel[0], wholeRows ? 0 : sel[1], sel[2], wholeRows ? lastCol : sel[3]);
+        Annotation an = Annotation.create(type, anchor, 0);
+        cur.annotations.add(an);
+        annModel.addElement(an);
+        annList.setSelectedIndex(annModel.size() - 1);
+        status.setText("Added " + type + " on the selected table cells.");
+        refresh();
+    }
+
+    /** Drops a free element in the middle of what is visible in the preview; the user then drags it into place. */
+    void addFree(Annotation.Type type) {
+        addFree(type, null);
+    }
+
+    /** @param at where to drop it (canvas pixels, 1x); null = the middle of the visible preview */
+    void addFree(Annotation.Type type, java.awt.geom.Point2D at) {
+        Block host = cur != null && !cur.overlay ? cur : null;
+        if (host == null) for (int i = 0; i < model.size() && host == null; i++) if (!model.get(i).overlay) host = model.get(i);
+        if (host == null) return;
+        commitHistory();
+        java.awt.geom.Point2D c = at != null ? at : preview.viewCenter1x();
+        Annotation an = Annotation.createFree(type, c.getX(), c.getY());
+        host.annotations.add(an);
+        if (host != cur) list.setSelectedValue(host, true);
+        else annModel.addElement(an);
+        annList.setSelectedValue(an, true);
+        renderNow();
+        preview.setSelected(an);
+        loadAnn();
+        commitHistory();
+        onChanged.run();
+        status.setText("Added " + type + " - drag it into place in the preview.");
+    }
+
+    private void maybePopup(java.awt.event.MouseEvent e) {
+        if (e.isPopupTrigger()) elementsMenu().show(e.getComponent(), e.getX(), e.getY());
+    }
+
+    /** Right-click menu: every element, aimed at the currently selected text / table cells. */
+    private JPopupMenu elementsMenu() {
+        JPopupMenu m = new JPopupMenu();
+        boolean tbl = cur != null && cur.kind == Block.Kind.TABLE;
+        Object[][] els = {{"Box", Icons.box(), Annotation.Type.BOX}, {"Arrow", Icons.arrow(), Annotation.Type.ARROW},
+                {"Pixelate", Icons.pixelate(), Annotation.Type.PIXELATE}, {"Blur", Icons.blur(), Annotation.Type.BLUR}};
+        for (Object[] el : els) {
+            JMenuItem mi = item((String) el[0] + (tbl ? " around selected cells" : " on selection"), "Attach to the selected " + (tbl ? "cells" : "text"), e -> addAnn((Annotation.Type) el[2]));
+            mi.setIcon((javax.swing.Icon) el[1]);
+            m.add(mi);
+        }
+        if (tbl) {
+            m.addSeparator();
+            m.add(item("Box around whole row(s)", "Box spanning every column of the selected rows", e -> addTableAnn(Annotation.Type.BOX, true)));
+            m.add(item("Arrow to whole row(s)", "Arrow pointing at the selected rows", e -> addTableAnn(Annotation.Type.ARROW, true)));
+        } else {
+            m.addSeparator();
+            m.add(item("Replace selection with ...", "Replace the selected text with ...", e -> replaceSel()));
+            m.add(item("Keep selection, ... the rest of the line", "Keep the header name and the selection, replace the rest of the line with ...", e -> ellipsizeOutside()));
+            m.addSeparator();
+            m.add(item("Delete line(s)", "Delete the selected line(s)", e -> lineOp(0)));
+            m.add(item("Collapse line(s) to ...", "Replace the selected line(s) with a single ... line", e -> lineOp(1)));
+            m.add(item("Keep only selected line(s)", "Keep only the selected line(s), collapse the rest into ...", e -> lineOp(2)));
+            m.addSeparator();
+            m.add(item("Render selection as HTML...", "Render the selected HTML and pick a region to add as an image layer", e -> renderHtmlAction()));
+        }
+        return m;
+    }
+
+    /** Inserts one of the table templates as a new layer. */
+    void addTable(String template) {
+        java.util.List<java.util.List<String>> rows = Templates.all().get(template);
+        if (rows == null) return;
+        Block b = Block.table(template, rows, st);
+        insert(b);
+        status.setText("Added table '" + template + "' - edit it in the Content tab, drag it into place in the preview.");
+    }
+
+    // ================================================================== right-click menu in the preview
+
+    private void deleteLayer(Block b) {
+        int i = b == null ? -1 : model.indexOf(b);
+        if (i < 0) return;
+        commitHistory();
+        model.remove(i);
+        if (!model.isEmpty()) list.setSelectedIndex(Math.min(i, model.size() - 1));
+        else {
+            cur = null;
+            refresh();
+        }
+        renderNow();
+        commitHistory();
+        onChanged.run();
+        status.setText("Deleted the layer.");
+    }
+
+    private void alignTo(int idx) {
+        if (cur == null) return;
+        commitHistory();
+        cur.align = idx;
+        cur.offX = 0;
+        loadStyle(cur);
+        renderNow();
+        commitHistory();
+        onChanged.run();
+    }
+
+    /** Menu for a right-click in the preview: delete / manage what was clicked, and add elements right there. */
+    private void previewMenu(Component invoker, int x, int y, Annotation an, Block layer, java.awt.geom.Point2D at) {
+        JPopupMenu m = new JPopupMenu();
+        if (an != null) {
+            m.add(item("Delete " + an.type.name().toLowerCase(), "Remove this element (Del)", e -> deleteAnnotation(an)));
+            m.add(item("Reset position / size", "Snap the element back to its text", e -> resetAdjust()));
+            m.addSeparator();
+        } else if (layer != null) {
+            m.add(item("Delete layer", "Remove this layer (Del)", e -> deleteLayer(layer)));
+            m.add(item("Duplicate layer", "Copy this layer", e -> duplicate()));
+            m.add(item("Move up", "Draw it earlier (further back / higher in the list)", e -> move(-1)));
+            m.add(item("Move down", "Draw it later (further forward / lower in the list)", e -> move(1)));
+            if (!layer.overlay) m.add(item("Crop...", "Crop / cut out parts of this layer", e -> cropLayer()));
+            m.add(item("Reset position and size", "Undo drag-moves and resizes of this layer", e -> resetLayer()));
+            if (!layer.overlay) {
+                javax.swing.JMenu al = new javax.swing.JMenu("Align on canvas");
+                al.add(item("Left", "Snap to the left edge", e -> alignTo(0)));
+                al.add(item("Centre", "Centre horizontally", e -> alignTo(1)));
+                al.add(item("Right", "Snap to the right edge", e -> alignTo(2)));
+                m.add(al);
+            }
+            m.addSeparator();
+        }
+        javax.swing.JMenu add = new javax.swing.JMenu("Add here");
+        Object[][] els = {{"Box", Icons.box(), Annotation.Type.BOX}, {"Arrow", Icons.arrow(), Annotation.Type.ARROW},
+                {"Pixelate", Icons.pixelate(), Annotation.Type.PIXELATE}, {"Blur", Icons.blur(), Annotation.Type.BLUR}};
+        for (Object[] el : els) {
+            JMenuItem mi = item((String) el[0], "Add a free " + el[0] + " at this spot", e -> addFree((Annotation.Type) el[2], at));
+            mi.setIcon((javax.swing.Icon) el[1]);
+            add.add(mi);
+        }
+        m.add(add);
+        m.show(invoker, x, y);
+    }
+
+    // ================================================================== search in the content editor
+
+    private void installFindKey() {
+        int mask;
+        try {
+            mask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        } catch (java.awt.HeadlessException e) {
+            mask = java.awt.event.InputEvent.CTRL_DOWN_MASK;
+        }
+        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).put(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F, mask), "pt-find");
+        getActionMap().put("pt-find", new javax.swing.AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (!search.isVisible()) return; // image / table layers have no text to search
+                tabs.setSelectedIndex(0);
+                search.focusField();
+            }
+        });
+    }
+
+    /** Search continues into the next / previous layer whose text contains a match (request -> response -> ...). */
+    private boolean jumpLayer(int dir, java.util.regex.Pattern pat) {
+        int n = model.size(), i0 = model.indexOf(cur);
+        if (i0 < 0) return false;
+        for (int st2 = 1; st2 < n; st2++) {
+            int i = ((i0 + dir * st2) % n + n) % n;
+            Block b = model.get(i);
+            if (b.overlay || b.kind == Block.Kind.IMAGE || b.kind == Block.Kind.TABLE) continue;
+            String t = b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.text;
+            if (t != null && pat.matcher(t).find()) {
+                list.setSelectedValue(b, true);
+                return true;
+            }
+        }
+        return false;
     }
 
     private void removeAnn() {
@@ -1075,15 +1833,10 @@ final class CapturePanel extends JPanel {
     private void reanchor() {
         Annotation a = annList.getSelectedValue();
         if (a == null || needSelection()) return;
-        String t = ta.getText();
-        int s = ta.getSelectionStart(), e = ta.getSelectionEnd();
-        a.anchor = t.substring(s, e);
-        int occ = 0, idx = t.indexOf(a.anchor);
-        while (idx >= 0 && idx < s) {
-            occ++;
-            idx = t.indexOf(a.anchor, idx + 1);
-        }
-        a.occurrence = occ;
+        Object[] sa = selAnchor();
+        if (((String) sa[0]).isEmpty()) return;
+        a.anchor = (String) sa[0];
+        a.occurrence = (Integer) sa[1];
         annList.repaint();
         refresh();
     }
@@ -1152,6 +1905,7 @@ final class CapturePanel extends JPanel {
 
     BufferedImage renderNow() {
         Renderer.Result res = Renderer.renderFull(blocks(), st, scale, maxWidth);
+        lastRes = res;
         last = res.image;
         preview.setResult(res);
         if (winPanel != null) winPanel.setImage(last);

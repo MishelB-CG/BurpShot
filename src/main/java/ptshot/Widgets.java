@@ -282,6 +282,9 @@ final class Checklist extends JPanel {
     }
 }
 
+/** What the mouse does in the preview. */
+enum PaintTool { SELECT, MARQUEE, PENCIL, BRUSH, BUCKET, ERASER }
+
 final class PreviewPanel extends JPanel implements Scrollable {
     /** Callbacks for live editing of annotations directly in the preview. */
     interface Editor {
@@ -296,6 +299,19 @@ final class PreviewPanel extends JPanel implements Scrollable {
         void delete(Annotation a);
 
         void pickedBlock(Block b);   // user clicked a layer (whole block) in the preview
+
+        void stroke(PaintTool t, java.util.List<java.awt.geom.Point2D> pts1x); // a pencil / brush / eraser stroke finished
+
+        void fill(double x1x, double y1x);       // bucket fill clicked
+
+        void marqueeDelete(Rectangle dev);       // Del pressed with a selection
+
+        void marqueeCrop(Rectangle dev);         // Enter pressed with a selection
+
+        void deleteBlock(Block b);               // Del pressed with a layer selected
+
+        /** Right-click: an annotation, or a layer, or neither (empty canvas) is under the cursor; at1x = the click in canvas pixels (1x). */
+        void contextMenu(Component invoker, int x, int y, Annotation an, Block layer, java.awt.geom.Point2D at1x);
     }
 
     private static final class Hit {
@@ -324,6 +340,13 @@ final class PreviewPanel extends JPanel implements Scrollable {
     private Editor editor;
     private Annotation selected, hover;
     private Block selLayer, hoverLayer;
+    private PaintTool tool = PaintTool.SELECT;
+    private Rectangle marquee;            // canvas device pixels
+    private Point mqAnchor;
+    private java.util.List<java.awt.geom.Point2D> stroke;
+    private Color penColor = Color.RED;
+    private double penSize = 3;
+    private float penAlpha = 1f;
     private Drag drag;
 
     PreviewPanel() {
@@ -334,6 +357,14 @@ final class PreviewPanel extends JPanel implements Scrollable {
             public void mousePressed(java.awt.event.MouseEvent e) {
                 if (editor == null || res == null) return;
                 requestFocusInWindow();
+                if (tool != PaintTool.SELECT) {
+                    toolPress(e);
+                    return;
+                }
+                if (javax.swing.SwingUtilities.isRightMouseButton(e)) {
+                    if (e.isPopupTrigger()) showContext(e);
+                    return;
+                }
                 Hit h = hitTest(e.getPoint());
                 if (h == null) {
                     pressLayer(e);
@@ -363,6 +394,10 @@ final class PreviewPanel extends JPanel implements Scrollable {
 
             @Override
             public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (tool != PaintTool.SELECT) {
+                    toolDrag(e);
+                    return;
+                }
                 if (drag == null || res == null) return;
                 if (drag.blk != null) applyLayerDrag(e);
                 else applyDrag(e);
@@ -371,6 +406,14 @@ final class PreviewPanel extends JPanel implements Scrollable {
 
             @Override
             public void mouseReleased(java.awt.event.MouseEvent e) {
+                if (tool != PaintTool.SELECT) {
+                    toolRelease(e);
+                    return;
+                }
+                if (e.isPopupTrigger()) {
+                    showContext(e);
+                    return;
+                }
                 if (drag != null) {
                     drag = null;
                     editor.end();
@@ -381,6 +424,10 @@ final class PreviewPanel extends JPanel implements Scrollable {
             @Override
             public void mouseMoved(java.awt.event.MouseEvent e) {
                 if (editor == null || res == null) return;
+                if (tool != PaintTool.SELECT) {
+                    setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+                    return;
+                }
                 Hit h = hitTest(e.getPoint());
                 Annotation nh = h == null ? null : h.g.an;
                 if (nh != hover) {
@@ -411,7 +458,15 @@ final class PreviewPanel extends JPanel implements Scrollable {
         addMouseMotionListener(ma);
         key("DELETE", () -> deleteSelected());
         key("BACK_SPACE", () -> deleteSelected());
+        key("ENTER", () -> {
+            if (marquee != null && editor != null) editor.marqueeCrop(new Rectangle(marquee));
+        });
         key("ESCAPE", () -> {
+            if (marquee != null) {
+                marquee = null;
+                repaint();
+                return;
+            }
             if (selected != null && editor != null) {
                 selected = null;
                 editor.picked(null);
@@ -444,10 +499,20 @@ final class PreviewPanel extends JPanel implements Scrollable {
     }
 
     private void deleteSelected() {
+        if (marquee != null && editor != null) {
+            editor.marqueeDelete(new Rectangle(marquee));
+            return;
+        }
         if (selected != null && editor != null) {
             Annotation a = selected;
             selected = null;
             editor.delete(a);
+            repaint();
+        } else if (selLayer != null && editor != null) {
+            Block b = selLayer;
+            selLayer = null;
+            hoverLayer = null;
+            editor.deleteBlock(b);
             repaint();
         }
     }
@@ -502,6 +567,16 @@ final class PreviewPanel extends JPanel implements Scrollable {
             selLayer = b;
             repaint();
         }
+    }
+
+    /** Centre of the part of the canvas currently visible, in 1x canvas pixels. */
+    java.awt.geom.Point2D viewCenter1x() {
+        if (res == null || img == null) return new java.awt.geom.Point2D.Double(120, 60);
+        double k = eff(), S = res.scale;
+        Rectangle canvas = new Rectangle(6, 6, (int) (img.getWidth() * k), (int) (img.getHeight() * k));
+        Rectangle vis = getVisibleRect().intersection(canvas);
+        if (vis.isEmpty()) vis = canvas;
+        return new java.awt.geom.Point2D.Double((vis.getCenterX() - 6) / k / S, (vis.getCenterY() - 6) / k / S);
     }
 
     void setZoom(double z) {
@@ -611,6 +686,16 @@ final class PreviewPanel extends JPanel implements Scrollable {
         if (res == null) return null;
         for (int i = res.layers.size() - 1; i >= 0; i--) {
             Renderer.Layer l = res.layers.get(i);
+            if (l.block.overlay) {
+                // the drawing layer covers the whole canvas: only count it where something is actually drawn
+                BufferedImage di = l.block.image;
+                double k = eff();
+                int dx = (int) Math.round((p.x - 6) / k) - l.body.x, dy = (int) Math.round((p.y - 6) / k) - l.body.y;
+                if (di == null || dx < 0 || dy < 0 || dx >= l.body.width || dy >= l.body.height) continue;
+                int ix = (int) (dx * (double) di.getWidth() / l.body.width), iy = (int) (dy * (double) di.getHeight() / l.body.height);
+                if (ix < di.getWidth() && iy < di.getHeight() && (di.getRGB(ix, iy) >>> 24) > 20) return l;
+                continue;
+            }
             if (scr(l.rect).contains(p)) return l;
         }
         return null;
@@ -618,6 +703,7 @@ final class PreviewPanel extends JPanel implements Scrollable {
 
     /** Which resize handles a layer offers: text boxes only change width (E / W); images scale proportionally (all 8). */
     private static boolean handleUsed(Block b, int i) {
+        if (b.overlay) return false;
         return b.kind == Block.Kind.IMAGE || i == 3 || i == 7;
     }
 
@@ -629,6 +715,36 @@ final class PreviewPanel extends JPanel implements Scrollable {
             if (handleUsed(l.block, i) && Math.abs(p.x - hp[i].x) <= 6 && Math.abs(p.y - hp[i].y) <= 6) return i;
         }
         return -1;
+    }
+
+    /** Right-click in the preview: select what is under the cursor, then let the capture panel build the menu. */
+    private void showContext(java.awt.event.MouseEvent e) {
+        if (editor == null || res == null || img == null) return;
+        requestFocusInWindow();
+        Hit h = hitTest(e.getPoint());
+        if (h != null) {
+            selLayer = null;
+            if (h.g.an != selected) {
+                selected = h.g.an;
+                editor.picked(selected);
+            }
+        } else {
+            Renderer.Layer l = layerAt(e.getPoint());
+            if (selected != null) {
+                selected = null;
+                editor.picked(null);
+            }
+            if (l != null) {
+                if (l.block != selLayer) {
+                    selLayer = l.block;
+                    editor.pickedBlock(l.block);
+                }
+            } else {
+                selLayer = null;
+            }
+        }
+        repaint();
+        editor.contextMenu(this, e.getX(), e.getY(), selected, selected == null ? selLayer : null, to1x(toDev(e)));
     }
 
     private void pressLayer(java.awt.event.MouseEvent e) {
@@ -706,6 +822,123 @@ final class PreviewPanel extends JPanel implements Scrollable {
                 g.setColor(c);
                 g.drawRect(hp[i].x - 4, hp[i].y - 4, 8, 8);
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- tools: marquee / pencil / brush / bucket / eraser
+
+    void setTool(PaintTool t) {
+        tool = t;
+        if (t != PaintTool.SELECT) {
+            selected = null;
+            selLayer = null;
+        }
+        stroke = null;
+        setCursor(Cursor.getPredefinedCursor(t == PaintTool.SELECT ? Cursor.DEFAULT_CURSOR : Cursor.CROSSHAIR_CURSOR));
+        repaint();
+    }
+
+    PaintTool tool() {
+        return tool;
+    }
+
+    void setPen(Color c, double size1x, float alpha) {
+        penColor = c;
+        penSize = size1x;
+        penAlpha = alpha;
+    }
+
+    Rectangle marquee() {
+        return marquee == null ? null : new Rectangle(marquee);
+    }
+
+    void clearMarquee() {
+        marquee = null;
+        repaint();
+    }
+
+    private Point toDev(java.awt.event.MouseEvent e) {
+        double k = eff();
+        int x = (int) Math.round((e.getX() - 6) / k), y = (int) Math.round((e.getY() - 6) / k);
+        return new Point(Math.max(0, Math.min(img.getWidth(), x)), Math.max(0, Math.min(img.getHeight(), y)));
+    }
+
+    private java.awt.geom.Point2D to1x(Point dev) {
+        return new java.awt.geom.Point2D.Double(dev.x / res.scale, dev.y / res.scale);
+    }
+
+    private void toolPress(java.awt.event.MouseEvent e) {
+        if (img == null || !javax.swing.SwingUtilities.isLeftMouseButton(e)) return;
+        Point p = toDev(e);
+        switch (tool) {
+            case MARQUEE:
+                mqAnchor = p;
+                marquee = null;
+                break;
+            case BUCKET:
+                editor.begin();
+                editor.fill(p.x / res.scale, p.y / res.scale);
+                editor.end();
+                break;
+            default:
+                stroke = new java.util.ArrayList<>();
+                stroke.add(to1x(p));
+                editor.begin();
+        }
+        repaint();
+    }
+
+    private void toolDrag(java.awt.event.MouseEvent e) {
+        if (img == null) return;
+        Point p = toDev(e);
+        if (tool == PaintTool.MARQUEE && mqAnchor != null) {
+            marquee = new Rectangle(Math.min(mqAnchor.x, p.x), Math.min(mqAnchor.y, p.y), Math.abs(p.x - mqAnchor.x), Math.abs(p.y - mqAnchor.y));
+        } else if (stroke != null) {
+            java.awt.geom.Point2D q = to1x(p), last = stroke.get(stroke.size() - 1);
+            if (q.distance(last) >= 0.4) stroke.add(q);
+        }
+        repaint();
+    }
+
+    private void toolRelease(java.awt.event.MouseEvent e) {
+        if (tool == PaintTool.MARQUEE) {
+            if (marquee != null && (marquee.width < 3 || marquee.height < 3)) marquee = null;
+            mqAnchor = null;
+        } else if (stroke != null) {
+            java.util.List<java.awt.geom.Point2D> pts = stroke;
+            stroke = null;
+            editor.stroke(tool, pts);
+            editor.end();
+        }
+        repaint();
+    }
+
+    private void paintToolOverlays(Graphics2D g, double k) {
+        if (marquee != null) {
+            Rectangle s = scr(marquee);
+            g.setColor(new Color(0, 120, 255, 40));
+            g.fillRect(s.x, s.y, s.width, s.height);
+            g.setStroke(new java.awt.BasicStroke(1f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, new float[]{5f, 4f}, 0f));
+            g.setColor(Color.WHITE);
+            g.drawRect(s.x, s.y, s.width, s.height);
+            g.setColor(Color.BLACK);
+            g.setStroke(new java.awt.BasicStroke(1f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, new float[]{5f, 4f}, 4.5f));
+            g.drawRect(s.x, s.y, s.width, s.height);
+        }
+        if (stroke != null && res != null && !stroke.isEmpty()) {
+            float w = (float) Math.max(1.0, penSize * res.scale * k);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Color c = tool == PaintTool.ERASER ? new Color(255, 255, 255, 170) : new Color(penColor.getRed(), penColor.getGreen(), penColor.getBlue(), Math.round(255 * penAlpha));
+            g.setColor(c);
+            g.setStroke(new java.awt.BasicStroke(w, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+            java.awt.geom.Path2D.Double path = new java.awt.geom.Path2D.Double();
+            for (int i = 0; i < stroke.size(); i++) {
+                double sx = sc(stroke.get(i).getX() * res.scale), sy = sc(stroke.get(i).getY() * res.scale);
+                if (i == 0) path.moveTo(sx, sy);
+                else path.lineTo(sx, sy);
+            }
+            if (stroke.size() == 1) path.lineTo(sc(stroke.get(0).getX() * res.scale) + 0.01, sc(stroke.get(0).getY() * res.scale));
+            g.draw(path);
         }
     }
 
@@ -809,6 +1042,7 @@ final class PreviewPanel extends JPanel implements Scrollable {
             Renderer.Layer sl = layerOf(selLayer);
             if (sl != null && selected == null) layerOutline(g, sl, blue, true);
         }
+        paintToolOverlays(g, k);
         g.dispose();
     }
 
@@ -991,6 +1225,156 @@ final class Icons {
             g.drawLine(2, 14, 16, 14);
             g.drawLine(12, 7, 16, 11);
             g.drawLine(16, 7, 12, 11);
+        });
+    }
+
+    static Icon select() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            java.awt.Polygon p = new java.awt.Polygon(new int[]{4, 4, 7, 9, 11, 9, 14}, new int[]{2, 15, 12, 16, 15, 11, 11}, 7);
+            g.fillPolygon(p);
+        });
+    }
+
+    static Icon marquee() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.setStroke(new java.awt.BasicStroke(1.5f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, new float[]{3f, 2.5f}, 0f));
+            g.drawRect(3, 4, 12, 10);
+        });
+    }
+
+    static Icon pencil() {
+        return make((g, fg) -> {
+            java.awt.geom.AffineTransform old = g.getTransform();
+            g.rotate(Math.toRadians(-45), 9, 9);
+            // drawn pointing left, then tilted so the tip is bottom-left
+            g.setColor(new Color(245, 190, 60));
+            g.fillRect(5, 6, 9, 6);
+            g.setColor(new Color(235, 130, 140));
+            g.fillRect(14, 6, 3, 6);
+            g.setColor(new Color(240, 215, 170));
+            g.fill(new java.awt.Polygon(new int[]{1, 5, 5}, new int[]{9, 6, 12}, 3));
+            g.setColor(fg);
+            g.drawRect(5, 6, 9, 6);
+            g.drawRect(14, 6, 3, 6);
+            g.drawPolygon(new java.awt.Polygon(new int[]{1, 5, 5}, new int[]{9, 6, 12}, 3));
+            g.fillPolygon(new java.awt.Polygon(new int[]{1, 2, 2}, new int[]{9, 8, 10}, 3));
+            g.drawLine(11, 6, 11, 12);
+            g.setTransform(old);
+        });
+    }
+
+    static Icon brush() {
+        return make((g, fg) -> {
+            java.awt.geom.AffineTransform old = g.getTransform();
+            g.rotate(Math.toRadians(-45), 9, 9);
+            // handle, metal ferrule, bristles (red paint)
+            g.setColor(new Color(160, 110, 60));
+            g.fillRoundRect(8, 7, 10, 4, 3, 3);
+            g.setColor(new Color(170, 170, 175));
+            g.fillRect(5, 6, 4, 6);
+            g.setColor(fg);
+            g.drawRect(5, 6, 4, 6);
+            g.drawLine(7, 6, 7, 12);
+            java.awt.geom.Path2D.Double tuft = new java.awt.geom.Path2D.Double();
+            tuft.moveTo(5, 6);
+            tuft.curveTo(2.5, 6, 0.5, 8, 0.5, 9);
+            tuft.curveTo(0.5, 10, 2.5, 12, 5, 12);
+            tuft.closePath();
+            g.setColor(new Color(215, 30, 30));
+            g.fill(tuft);
+            g.setTransform(old);
+        });
+    }
+
+    static Icon bucket() {
+        return make((g, fg) -> {
+            java.awt.geom.AffineTransform old = g.getTransform();
+            g.rotate(Math.toRadians(-22), 8, 9);
+            // handle over the top, bucket body, paint surface
+            g.setColor(fg);
+            g.draw(new java.awt.geom.Arc2D.Double(4, 0.5, 9, 9, 0, 180, java.awt.geom.Arc2D.OPEN));
+            java.awt.Polygon body = new java.awt.Polygon(new int[]{3, 14, 12, 5}, new int[]{6, 6, 16, 16}, 4);
+            g.setColor(new Color(225, 228, 232));
+            g.fillPolygon(body);
+            g.setColor(new Color(215, 30, 30));
+            g.fillPolygon(new java.awt.Polygon(new int[]{3, 14, 13, 4}, new int[]{6, 6, 9, 9}, 4));
+            g.setColor(fg);
+            g.drawPolygon(body);
+            g.drawLine(3, 6, 14, 6);
+            g.setTransform(old);
+            // a drop of paint falling out
+            g.setColor(new Color(215, 30, 30));
+            g.fillOval(14, 12, 3, 3);
+            g.fillPolygon(new java.awt.Polygon(new int[]{14, 17, 15}, new int[]{13, 13, 10}, 3));
+        });
+    }
+
+    static Icon eraser() {
+        return make((g, fg) -> {
+            java.awt.geom.AffineTransform old = g.getTransform();
+            g.rotate(Math.toRadians(-45), 9, 9);
+            // rubber (pink) and the sleeve (light) of a block eraser
+            g.setColor(new Color(240, 130, 140));
+            g.fillRoundRect(2, 5, 8, 8, 3, 3);
+            g.setColor(new Color(235, 238, 242));
+            g.fillRect(9, 5, 7, 8);
+            g.setColor(fg);
+            g.drawRoundRect(2, 5, 14, 8, 3, 3);
+            g.drawLine(9, 5, 9, 13);
+            g.setTransform(old);
+        });
+    }
+    static Icon text() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawLine(3, 4, 15, 4);
+            g.drawLine(9, 4, 9, 15);
+            g.drawLine(6, 15, 12, 15);
+        });
+    }
+
+    static Icon table() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawRect(2, 3, 14, 12);
+            g.drawLine(2, 7, 16, 7);
+            g.drawLine(2, 11, 16, 11);
+            g.drawLine(8, 3, 8, 15);
+        });
+    }
+
+    static Icon pick() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawOval(5, 5, 8, 8);
+            g.drawLine(9, 1, 9, 6);
+            g.drawLine(9, 12, 9, 17);
+            g.drawLine(1, 9, 6, 9);
+            g.drawLine(12, 9, 17, 9);
+            g.setColor(new Color(0, 120, 255));
+            g.fillOval(8, 8, 3, 3);
+        });
+    }
+
+    static Icon crop() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawLine(5, 1, 5, 13);
+            g.drawLine(5, 13, 17, 13);
+            g.drawLine(1, 5, 13, 5);
+            g.drawLine(13, 5, 13, 17);
+        });
+    }
+
+    static Icon terminal() {
+        return make((g, fg) -> {
+            g.setColor(fg);
+            g.drawRect(1, 3, 16, 12);
+            g.drawLine(4, 6, 7, 9);
+            g.drawLine(7, 9, 4, 12);
+            g.drawLine(9, 12, 13, 12);
         });
     }
 

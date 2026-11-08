@@ -53,6 +53,13 @@ final class Renderer {
         Color[] colors;
         final List<VLine> lines = new ArrayList<>();
         int labelW, labelH, labelAsc, labelGap, textW, textH, bpad, boxW, boxH, w, h, x, y, lineH, asc;
+        // terminals
+        Term.Parsed term;
+        int topExtra;     // window title bar above the text
+        // tables
+        List<List<String>> rows;
+        int[] colW, colX;
+        int rowH, padX, padY;
         BufferedImage img;
         int imgW, imgH;
 
@@ -110,11 +117,13 @@ final class Renderer {
         final Block block;
         final Rectangle rect;
         final int bodyW;   // width of the text box / image itself (the part manual resizing controls)
+        final Rectangle body; // the text box / image itself (without the label)
 
-        Layer(Block block, Rectangle rect, int bodyW) {
+        Layer(Block block, Rectangle rect, int bodyW, Rectangle body) {
             this.block = block;
             this.rect = rect;
             this.bodyW = bodyW;
+            this.body = body;
         }
     }
 
@@ -151,6 +160,7 @@ final class Renderer {
         // group blocks into rows first, so side-by-side blocks can share the available width
         List<List<Block>> brow = new ArrayList<>();
         for (Block b : blocks) {
+            if (b.overlay) continue;
             if (b.beside && !brow.isEmpty()) brow.get(brow.size() - 1).add(b);
             else {
                 List<Block> r = new ArrayList<>();
@@ -178,6 +188,8 @@ final class Renderer {
             rows.add(r);
             all.addAll(r);
         }
+        List<Laid> ovs = new ArrayList<>();
+        for (Block b : blocks) if (b.overlay) ovs.add(measure(b, st, S, mg, 0));
         mg.dispose();
         if (all.isEmpty()) {
             BufferedImage e = new BufferedImage(10, 10, BufferedImage.TYPE_INT_RGB);
@@ -238,6 +250,10 @@ final class Renderer {
         }
         W = right;
         int H = bottom;
+        for (Laid a : ovs) {
+            a.x = Math.max(0, px(a.b.offX, S));
+            a.y = Math.max(0, px(a.b.offY, S));
+        }
 
         BufferedImage out = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = out.createGraphics();
@@ -249,13 +265,14 @@ final class Renderer {
             g.fillRect(r.x, r.y, r.w, r.h);
         }
         for (Laid a : all) draw(g, a);
+        for (Laid a : ovs) draw(g, a);
         g.dispose();
 
         // ---- annotations: pixelate/blur first (they destroy pixels), then boxes/arrows on top ----
         List<Geo> geo = new ArrayList<>();
         for (Laid a : all) {
             for (Annotation an : a.b.annotations) {
-                Rectangle r = anchorRect(a, an, S);
+                Rectangle r = an.free ? new Rectangle(px(an.fx, S), px(an.fy, S), Math.max(1, px(an.fw, S)), Math.max(1, px(an.fh, S))) : anchorRect(a, an, S);
                 if (r == null) continue;
                 if (an.type == Annotation.Type.ARROW) geo.add(new Geo(a.b, an, null, arrowPts(an, r, S)));
                 else geo.add(new Geo(a.b, an, boxRect(an, r, S), null));
@@ -280,7 +297,8 @@ final class Renderer {
         }
         g2.dispose();
         List<Layer> layers = new ArrayList<>();
-        for (Laid a : all) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW));
+        for (Laid a : all) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW, new Rectangle(a.bodyX(), a.bodyY(), a.boxW, a.boxH)));
+        for (Laid a : ovs) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW, new Rectangle(a.bodyX(), a.bodyY(), a.boxW, a.boxH)));
         return new Result(out, geo, layers, S);
     }
 
@@ -383,6 +401,8 @@ final class Renderer {
             }
             a.boxW = a.imgW;
             a.boxH = a.imgH;
+        } else if (b.kind == Block.Kind.TABLE) {
+            measureTable(a, b, st, S, mg);
         } else {
             FontSpec bs = b.bodyFont != null ? b.bodyFont : st.bodyFont;
             a.bf = bs.toFont(S);
@@ -390,20 +410,242 @@ final class Renderer {
             FontMetrics fm = mg.getFontMetrics(a.bf);
             a.lineH = fm.getHeight();
             a.asc = fm.getAscent();
-            a.bpad = b.background != null ? px(6, S) : 0;
+            a.bpad = bpadOf(b, S);
+            if (b.kind == Block.Kind.TERMINAL) {
+                a.topExtra = Term.chromeH(b) > 0 ? px(Term.chromeH(b), S) : 0;
+                a.term = Term.parse(b.raw, Term.palette(b), a.base, Term.bg(b));
+                Term.style(a.term, b);
+                b.text = a.term.text;
+            }
             layoutLines(a, b, b.boxW > 0 ? px(b.boxW, S) : limit);
             double mw = 0;
             for (VLine v : a.lines) mw = Math.max(mw, a.sw(a.bf, v.text));
             a.textW = (int) Math.ceil(mw);
             a.textH = a.lines.size() * a.lineH;
-            a.bpad = b.background != null ? px(6, S) : 0;
+            a.bpad = bpadOf(b, S);
             a.boxW = a.lines.isEmpty() ? 0 : (b.boxW > 0 ? Math.max(px(b.boxW, S), a.textW + 2 * a.bpad) : a.textW + 2 * a.bpad);
-            a.boxH = a.lines.isEmpty() ? 0 : a.textH + 2 * a.bpad;
+            if (b.kind == Block.Kind.TERMINAL && a.topExtra > 0 && !a.lines.isEmpty()) {
+                // the title bar needs room for its title plus the window buttons / traffic lights
+                double tw = a.sw(a.bf.deriveFont(Font.PLAIN, (float) (a.bf.getSize2D() * 0.85)), b.title == null ? "" : b.title);
+                String ch = b.chrome == null ? "" : b.chrome;
+                double need = ch.equals("MAC") ? tw + 140 * S : ch.equals("LINUX") ? tw + 88 * S : tw + 170 * S;
+                a.boxW = Math.max(a.boxW, (int) Math.ceil(need));
+            }
+            a.boxH = a.lines.isEmpty() ? 0 : a.textH + 2 * a.bpad + a.topExtra;
             if (b.highlight && b.isHttp()) a.colors = Highlighter.colorize(b.text, b.kind == Block.Kind.REQUEST, a.base, st.syn);
         }
         a.w = Math.max(a.labelW, a.boxW);
         a.h = (a.label != null ? a.labelH + (a.boxH > 0 ? a.labelGap : 0) : 0) + a.boxH;
         return a;
+    }
+
+    // ------------------------------------------------------------------ terminals
+
+    private static int bpadOf(Block b, double S) {
+        if (b.kind == Block.Kind.TERMINAL) return px(10, S);
+        return b.background != null ? px(6, S) : 0;
+    }
+
+    private static boolean same(Color a, Color b) {
+        return a == null ? b == null : a.equals(b);
+    }
+
+    private static void drawTerminal(Graphics2D g, Laid a) {
+        int bx = a.bodyX(), by = a.bodyY();
+        Color bg = Term.bg(a.b);
+        g.setColor(bg);
+        g.fillRect(bx, by, a.boxW, a.boxH);
+        if (a.topExtra > 0) drawChrome(g, a, bx, by, bg);
+        g.setFont(a.bf);
+        Term.Parsed t = a.term;
+        int top = by + a.topExtra + a.bpad;
+        for (int i = 0; i < a.lines.size(); i++) {
+            VLine v = a.lines.get(i);
+            float base = top + i * a.lineH + a.asc;
+            double x0 = bx + a.bpad;
+            if (v.s < 0) {
+                g.setColor(a.base);
+                g.drawString(v.text, (float) x0, base);
+                continue;
+            }
+            int n = v.e - v.s, len = v.text.length(), k = 0;
+            while (k < len) {
+                boolean real = k < n && v.s + k < t.fg.length;
+                Color fc = real ? t.fg[v.s + k] : a.base, bc = real ? t.bg[v.s + k] : null;
+                boolean u = real && t.ul[v.s + k];
+                boolean bd = real && v.s + k < t.bold.length && t.bold[v.s + k];
+                int j = k + 1;
+                while (j < len) {
+                    boolean r2 = j < n && v.s + j < t.fg.length;
+                    if (r2 != real) break;
+                    if (r2 && !(same(t.fg[v.s + j], fc) && same(t.bg[v.s + j], bc) && t.ul[v.s + j] == u && (v.s + j < t.bold.length && t.bold[v.s + j]) == bd)) break;
+                    j++;
+                }
+                String seg = v.text.substring(k, j);
+                double sx = x0 + a.sw(a.bf, v.text.substring(0, k)), sw = a.sw(a.bf, seg);
+                if (bc != null) {
+                    g.setColor(bc);
+                    g.fillRect((int) Math.floor(sx), top + i * a.lineH, (int) Math.ceil(sw), a.lineH);
+                }
+                g.setColor(fc);
+                g.setFont(bd ? a.bf.deriveFont(Font.BOLD) : a.bf);
+                g.drawString(seg, (float) sx, base);
+                if (u) g.fillRect((int) Math.floor(sx), (int) (base + a.lineH * 0.1), (int) Math.ceil(sw), Math.max(1, a.lineH / 16));
+                k = j;
+            }
+        }
+    }
+
+    /** Window title bar: Windows (title left, three buttons right), macOS (traffic lights left), Linux (title centred, close right). */
+    private static void drawChrome(Graphics2D g, Laid a, int bx, int by, Color termBg) {
+        int w = a.boxW, h = a.topExtra;
+        boolean dark = Term.dark(termBg);
+        String style = a.b.chrome == null ? "NONE" : a.b.chrome;
+        Color bar = style.equals("MAC") ? (dark ? new Color(58, 58, 58) : new Color(232, 232, 232))
+                : style.equals("LINUX") ? (dark ? new Color(44, 44, 44) : new Color(225, 225, 225))
+                : (dark ? new Color(32, 32, 32) : new Color(243, 243, 243));
+        Color txt = Term.dark(bar) ? new Color(235, 235, 235) : new Color(30, 30, 30);
+        g.setColor(bar);
+        g.fillRect(bx, by, w, h);
+        Font tf = a.bf.deriveFont(Font.PLAIN, (float) (a.bf.getSize2D() * 0.85));
+        String name = a.b.title == null ? "" : a.b.title;
+        FontMetrics fm = g.getFontMetrics(tf);
+        int ty = by + (h + fm.getAscent() - fm.getDescent()) / 2;
+        double u = h / 34.0;
+        g.setFont(tf);
+        g.setColor(txt);
+        if (style.equals("MAC")) {
+            int r = (int) Math.round(6 * u), cy = by + h / 2, cx = bx + (int) Math.round(18 * u);
+            Color[] lights = {new Color(255, 95, 86), new Color(255, 189, 46), new Color(39, 201, 63)};
+            for (int i = 0; i < 3; i++) {
+                g.setColor(lights[i]);
+                g.fillOval(cx + i * (int) Math.round(20 * u) - r, cy - r, 2 * r, 2 * r);
+            }
+            g.setColor(txt);
+            g.drawString(name, bx + (w - fm.stringWidth(name)) / 2, ty);
+        } else if (style.equals("LINUX")) {
+            g.drawString(name, bx + (w - fm.stringWidth(name)) / 2, ty);
+            int r = (int) Math.round(8 * u), cx = bx + w - (int) Math.round(22 * u), cy = by + h / 2;
+            g.setColor(dark ? new Color(80, 80, 80) : new Color(200, 200, 200));
+            g.fillOval(cx - r, cy - r, 2 * r, 2 * r);
+            g.setColor(txt);
+            int d = (int) Math.round(3.5 * u);
+            g.setStroke(new BasicStroke((float) Math.max(1.0, 1.4 * u)));
+            g.drawLine(cx - d, cy - d, cx + d, cy + d);
+            g.drawLine(cx - d, cy + d, cx + d, cy - d);
+        } else {
+            g.drawString(name, bx + (int) Math.round(14 * u), ty);
+            int bw = (int) Math.round(46 * u), cy = by + h / 2, s = (int) Math.round(5 * u);
+            g.setStroke(new BasicStroke((float) Math.max(1.0, 1.2 * u)));
+            int x3 = bx + w - bw / 2, x2 = bx + w - bw - bw / 2, x1 = bx + w - 2 * bw - bw / 2;
+            g.drawLine(x1 - s, cy, x1 + s, cy);
+            g.drawRect(x2 - s, cy - s, 2 * s, 2 * s);
+            g.drawLine(x3 - s, cy - s, x3 + s, cy + s);
+            g.drawLine(x3 - s, cy + s, x3 + s, cy - s);
+        }
+        g.setStroke(new BasicStroke(1f));
+    }
+
+    // ------------------------------------------------------------------ tables
+
+    private static void measureTable(Laid a, Block b, Settings st, double S, Graphics2D mg) {
+        FontSpec bs = b.bodyFont != null ? b.bodyFont : st.bodyFont;
+        a.bf = bs.toFont(S);
+        a.base = bs.color;
+        FontMetrics fm = mg.getFontMetrics(a.bf);
+        a.lineH = fm.getHeight();
+        a.asc = fm.getAscent();
+        a.padX = px(8, S);
+        a.padY = px(4, S);
+        a.rowH = a.lineH + 2 * a.padY;
+        a.rows = b.rows;
+        int nc = 0;
+        for (List<String> r : b.rows) nc = Math.max(nc, r.size());
+        a.colW = new int[nc];
+        a.colX = new int[nc];
+        for (int c = 0; c < nc; c++) {
+            int w = px(30, S);
+            for (List<String> r : b.rows) if (c < r.size()) w = Math.max(w, (int) Math.ceil(a.sw(a.bf, r.get(c))) + 2 * a.padX);
+            a.colW[c] = w;
+        }
+        int total = 0;
+        for (int w : a.colW) total += w;
+        int target = b.boxW > 0 ? px(b.boxW, S) : 0;
+        if (target > total && nc > 0) {
+            int extra = (target - total) / nc;
+            for (int c = 0; c < nc; c++) a.colW[c] += extra;
+            total = 0;
+            for (int w : a.colW) total += w;
+        }
+        int x = 0;
+        for (int c = 0; c < nc; c++) {
+            a.colX[c] = x;
+            x += a.colW[c];
+        }
+        a.textW = total;
+        a.boxW = nc == 0 ? 0 : total;
+        a.boxH = b.rows.size() * a.rowH;
+    }
+
+    private static void drawTable(Graphics2D g, Laid a) {
+        int bx = a.bodyX(), by = a.bodyY(), w = a.boxW;
+        if (w <= 0) return;
+        g.setColor(a.b.background != null ? a.b.background : Color.WHITE);
+        g.fillRect(bx, by, w, a.boxH);
+        Color grid = new Color(222, 222, 222);
+        for (int r = 0; r < a.rows.size(); r++) {
+            int y = by + r * a.rowH;
+            if (r == 0) {
+                g.setColor(new Color(243, 243, 243));
+                g.fillRect(bx, y, w, a.rowH);
+            } else if (r % 2 == 1 && a.b.background == null) {
+                g.setColor(new Color(247, 247, 247));
+                g.fillRect(bx, y, w, a.rowH);
+            }
+        }
+        g.setColor(grid);
+        for (int c = 1; c < a.colX.length; c++) g.drawLine(bx + a.colX[c], by, bx + a.colX[c], by + a.boxH);
+        g.setColor(new Color(200, 200, 200));
+        g.drawLine(bx, by + a.rowH, bx + w - 1, by + a.rowH);
+        g.setFont(a.bf);
+        for (int r = 0; r < a.rows.size(); r++) {
+            List<String> row = a.rows.get(r);
+            g.setColor(r == 0 ? new Color(60, 60, 60) : a.base);
+            for (int c = 0; c < row.size() && c < a.colX.length; c++) {
+                g.drawString(row.get(c), (float) (bx + a.colX[c] + a.padX), (float) (by + r * a.rowH + a.padY + a.asc));
+            }
+        }
+    }
+
+    private static Rectangle cellRect(Laid a, int r, int c) {
+        return new Rectangle(a.bodyX() + a.colX[c], a.bodyY() + r * a.rowH, a.colW[c], a.rowH);
+    }
+
+    private static Rectangle tableAnchor(Laid a, Annotation an) {
+        if (a.colX == null || a.colX.length == 0 || a.rows.isEmpty() || an.anchor == null || an.anchor.isEmpty()) return null;
+        if (an.anchor.startsWith("\u0001b:")) {
+            try {
+                String[] p = an.anchor.substring(3).split(":");
+                int r0 = Integer.parseInt(p[0]), c0 = Integer.parseInt(p[1]), r1 = Integer.parseInt(p[2]), c1 = Integer.parseInt(p[3]);
+                r0 = Math.max(0, Math.min(r0, a.rows.size() - 1));
+                r1 = Math.max(0, Math.min(r1, a.rows.size() - 1));
+                c0 = Math.max(0, Math.min(c0, a.colX.length - 1));
+                c1 = Math.max(0, Math.min(c1, a.colX.length - 1));
+                return cellRect(a, r0, c0).union(cellRect(a, r1, c1));
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        int seen = 0;
+        for (int r = 0; r < a.rows.size(); r++) {
+            List<String> row = a.rows.get(r);
+            for (int c = 0; c < row.size() && c < a.colX.length; c++) {
+                if (row.get(c).contains(an.anchor)) {
+                    if (seen++ == an.occurrence) return cellRect(a, r, c);
+                }
+            }
+        }
+        return null;
     }
 
     private static void layoutLines(Laid a, Block b, int limit) {
@@ -478,6 +720,14 @@ final class Renderer {
             g.setColor(a.lcol);
             g.drawString(a.label, (float) a.labelX(), (float) (a.y + a.labelAsc));
         }
+        if (a.b.kind == Block.Kind.TERMINAL && !a.lines.isEmpty()) {
+            drawTerminal(g, a);
+            return;
+        }
+        if (a.rows != null) {
+            drawTable(g, a);
+            return;
+        }
         if (a.img != null) {
             g.drawImage(a.img, a.bodyX(), a.bodyY(), a.imgW, a.imgH, null);
             return;
@@ -525,11 +775,12 @@ final class Renderer {
     }
 
     private static Rectangle anchorRect(Laid a, Annotation an, double S) {
+        if (a.rows != null) return tableAnchor(a, an);
         if (a.lines.isEmpty() || an.anchor == null || an.anchor.isEmpty()) return null;
         int s = nth(a.b.text, an.anchor, an.occurrence);
         if (s < 0) return null;
         int e = s + an.anchor.length();
-        int bx = a.bodyX() + a.bpad, by = a.bodyY() + a.bpad;
+        int bx = a.bodyX() + a.bpad, by = a.bodyY() + a.bpad + a.topExtra;
         Rectangle r = null;
         for (int i = 0; i < a.lines.size(); i++) {
             VLine v = a.lines.get(i);
