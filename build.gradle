@@ -9,6 +9,10 @@ repositories {
 dependencies {
     // Provided by Burp at runtime. Pin to a specific release if you prefer reproducible builds.
     compileOnly 'net.portswigger.burp.extensions:montoya-api:+'
+
+    // SFTP/SCP for "Share -> Save to remote" (BSD licence). The same jar is vendored in libs/ with its
+    // SHA-256 for offline use; it is bundled into the extension jar by the jar task below.
+    implementation 'com.github.mwiede:jsch:2.28.8'
 }
 
 java {
@@ -24,4 +28,11 @@ tasks.withType(JavaCompile).configureEach {
 jar {
     archiveBaseName = 'burpshot'
     archiveVersion = ''
+
+    // Fat jar: Burp loads a single jar, so bundle the runtime dependencies (JSch).
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    // JSch ships Java 11+ specific classes under META-INF/versions; keep them usable in the merged jar.
+    manifest { attributes 'Multi-Release': 'true' }
 }

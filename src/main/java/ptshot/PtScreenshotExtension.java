@@ -46,33 +46,41 @@ public class PtScreenshotExtension implements BurpExtension {
         }
         st.load(k -> api.persistence().preferences().getString(k));
 
+        // where captures are kept: Burp project file (default) / this session / a folder, optionally encrypted (see Persist)
+        final Persist.Env env = new Persist.Env() {
+            public String projectName() {
+                try {
+                    String n = api.project().name();
+                    return n == null ? "" : n;
+                } catch (Throwable t) {
+                    return "";
+                }
+            }
+
+            public CaptureBackend projectBackend() {
+                return new ProjectBackend(api.persistence().extensionData());
+            }
+
+            public String pref(String key) {
+                try {
+                    return api.persistence().preferences().getString(key);
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
+
+            public void setPref(String key, String value) {
+                api.persistence().preferences().setString(key, value);
+            }
+        };
+        final Persist store = new Persist(env);
+
         SwingUtilities.invokeLater(() -> {
             panel = new MainPanel(st, s -> {
                 for (Map.Entry<String, String> e : s.toMap().entrySet()) {
                     api.persistence().preferences().setString("ptshot." + e.getKey(), e.getValue());
                 }
-            }, c -> api.userInterface().applyThemeToComponent(c), new MainPanel.CaptureStore() {
-                private static final String COUNT = "ptshot.captures.count";
-
-                public List<String> load() {
-                    List<String> l = new ArrayList<>();
-                    burp.api.montoya.persistence.PersistedObject d = api.persistence().extensionData();
-                    Integer n = d.getInteger(COUNT);
-                    for (int i = 0; n != null && i < n; i++) {
-                        String s = d.getString("ptshot.capture." + i);
-                        if (s != null) l.add(s);
-                    }
-                    return l;
-                }
-
-                public void save(List<String> items) {
-                    burp.api.montoya.persistence.PersistedObject d = api.persistence().extensionData();
-                    Integer old = d.getInteger(COUNT);
-                    for (int i = 0; i < items.size(); i++) d.setString("ptshot.capture." + i, items.get(i));
-                    for (int i = items.size(); old != null && i < old; i++) d.deleteString("ptshot.capture." + i);
-                    d.setInteger(COUNT, items.size());
-                }
-            });
+            }, c -> api.userInterface().applyThemeToComponent(c), store);
             api.userInterface().applyThemeToComponent(panel);
             api.userInterface().registerSuiteTab("BurpShot", panel);
         });
@@ -115,10 +123,8 @@ public class PtScreenshotExtension implements BurpExtension {
         }
 
         api.extension().registerUnloadingHandler(() -> {
-            if (panel != null) {
-                panel.saveNow();
-                panel.disposeWindows();
-            }
+            if (panel != null) panel.shutdown(); // bounded: never holds Burp up when it closes
+            else store.shutdown();
         });
         api.logging().logToOutput("BurpShot loaded. Right-click a request -> Extensions -> BurpShot, or press " + HOTKEY
                 + " (" + registered + " hotkey contexts registered; change it in Settings -> User interface -> Hotkeys).");

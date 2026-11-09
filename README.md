@@ -24,10 +24,11 @@ reports - and lets you finish them without leaving Burp: crop, annotate, redact,
 9. [Adding content](#9-adding-content)
 10. [Terminal layer](#10-terminal-layer)
 11. [Output, width and scale](#11-output-width-and-scale)
-12. [Undo / redo and persistence](#12-undo--redo-and-persistence)
-13. [Global settings](#13-global-settings)
-14. [Keyboard and mouse reference](#14-keyboard-and-mouse-reference)
-15. [Notes and limits](#15-notes-and-limits)
+12. [Undo / redo, saving and encryption](#12-undo--redo-saving-and-encryption)
+13. [Share (save to remote)](#13-share-save-to-remote)
+14. [Global settings](#14-global-settings)
+15. [Keyboard and mouse reference](#15-keyboard-and-mouse-reference)
+16. [Notes and limits](#16-notes-and-limits)
 
 ---
 
@@ -35,10 +36,28 @@ reports - and lets you finish them without leaving Burp: crop, annotate, redact,
 
 **Install:** Burp -> *Extensions* -> *Add* -> Extension type **Java** -> select `burpshot.jar` (a prebuilt copy is in the repository root).
 
-**Build from source:**
-* `gradle jar` (output in `build/libs/`), or
-* `javac --release 17 -cp montoya-api.jar -d out src/main/java/ptshot/*.java`, then copy `src/main/resources/META-INF` into `out` and
-  `jar cf burpshot.jar -C out .`
+**Build from source** (JDK 17 or newer):
+* `./build.sh` (Git Bash on Windows, Linux, macOS) - verifies the bundled SSH library's checksum, compiles, and writes `burpshot.jar`. It expects the Montoya API jar at `../montoya-api.jar` (or set `MONTOYA=/path/to/montoya-api.jar`).
+* or `gradle jar` (output in `build/libs/`).
+
+The extension jar bundles one third-party library, **JSch** (`com.github.mwiede:jsch` 2.28.8, BSD licence), for SFTP/SCP in [Share](#13-share-save-to-remote). It is kept in `libs/` with its SHA-256 and licence notice and is checked on every build. Everything else uses only the JDK.
+
+**Self-tests** (no Burp needed; use `:` instead of `;` in the class path on Linux / macOS):
+```
+javac -encoding UTF-8 --release 17 -cp "../montoya-api.jar;libs/jsch-2.28.8.jar" -d out src/main/java/ptshot/*.java src/test/java/ptshot/*SelfTest.java
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.CoreSelfTest      # encryption, tamper / zip-bomb / hostile-JSON checks, storage modes
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.MigrateSelfTest   # import of captures saved by older versions
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.RemoteSelfTest    # upload backends and the request view against local mock servers
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.ShareSelfTest     # validation of the saved Share profiles / host keys
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.SavePngSelfTest   # Save PNG: plain / encrypted, locked and off states
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inline script pretty-printing
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.StorageDialogSelfTest   # drives the real Storage dialog (needs a display)
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.CutOutSelfTest    # "cut out and join" pixel checks
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.PanelSelfTest     # real panels: save / restart / unload timing (needs a display)
+```
+`RemoteSftpServerTest` (SFTP against an in-process SSH server) needs extra jars; the list is in its header comment.
 
 After loading, a **BurpShot** tab appears in Burp's top tab bar and a *Send to BurpShot* item in the right-click menu.
 
@@ -114,11 +133,11 @@ Selecting a block shows its settings in the three tabs. Clicking a layer in the 
 
 | Control | Does |
 |---|---|
-| **Undo / Redo** | Step through the history of this capture ([section 12](#12-undo--redo-and-persistence)). |
+| **Undo / Redo** | Step through the history of this capture ([section 12](#12-undo--redo-saving-and-encryption)). |
 | **Preview window** | Opens the image in its own window (zoomable, with Copy / Save) so you can capture it with an external tool. |
 | **Copy image** | Copies the PNG to the clipboard. |
-| **Save PNG...** | Saves the PNG to a file. |
-| **Global settings...** | Opens [global settings](#13-global-settings). |
+| **Save PNG...** | Saves the PNG to a file. With encryption turned on, the save dialog has an **Encrypt with my BurpShot password** box (see [12.3](#123-encryption-at-rest)). |
+| **Global settings...** | Opens [global settings](#14-global-settings). |
 | **Close capture** | Closes this capture. |
 | **Zoom** | Fit width, 25 %, 50 %, 75 %, 100 %, 150 % (display only, does not change the output). |
 | **Output scale x** | Pixel density of the exported image (1x - 4x; default 2x). |
@@ -136,7 +155,7 @@ Shows the content of the selected layer. What you see depends on the layer type.
 ![Content tab](docs/images/05-content-tab.png)
 
 **Pretty / Raw.** Switch between the two views of the body:
-* **Pretty** (default) re-indents JSON, XML and HTML. The format is taken from the `Content-Type` header, or guessed from the body.
+* **Pretty** (default) re-indents JSON, XML, HTML (including inline `<script>` and `<style>` blocks), **JavaScript and CSS** (minified bundles become one statement per line, so you can pick a single line and keep only it). Strings, template literals, regular expressions and comments are never touched, and the code is never executed. Switching a JavaScript/CSS body back to *Raw* keeps the formatted text you see; use *Reset text* to get the original bytes. The format is taken from the `Content-Type` header, or guessed from the body.
 * **Raw** shows the body exactly as captured.
 
 Switching **Pretty / Raw keeps your manual edits**: only the body of the text as it is now is re-formatted (Pretty re-indents it, Raw compacts it again), so deleted headers, removed lines and `...` parts stay as you left them. Changing a **filter** or pressing *Reset text*, on the other hand, rebuilds the text from the captured message - **manual edits to that layer are lost**.
@@ -415,9 +434,25 @@ Select a layer, click **Crop** in the palette.
 
 1. For an **image** layer the dialog opens immediately. A **text / table / terminal** layer is first converted to an image - you choose
    **Replace the layer**, **Add as a new image layer** (keeps the original), or **Cancel**. After conversion the text is no longer editable.
-2. Drag a rectangle on the image.
-3. **Crop to selection** keeps only that region. **Cut out selection** erases it (it becomes transparent). Repeat as often as needed; **Undo** steps back.
+2. Choose the **Select** mode, then drag on the image:
+   * **Rectangle** - a free rectangle.
+   * **Horizontal band** - a "ray" selection: it always spans the **whole width** of the layer; you only choose which rows by dragging up / down.
+   * **Vertical band** - the **whole height** of the layer; you only choose which columns by dragging left / right.
+3. Then pick what to do with the selection:
+
+   | Button | Does |
+   |---|---|
+   | **Crop to selection** | Keeps only the selected region (works in every mode). |
+   | **Erase selection** | Makes the selected region transparent but keeps the layer's size. |
+   | **Cut out and join** | Removes the selected band **completely** and joins the two remaining parts, so the layer gets shorter (horizontal band) or narrower (vertical band). Needs *Horizontal band* or *Vertical band*. |
+
+   ![Cut out and join](docs/images/37-cut-out-join.png)
+   > 📷 Screenshot needed - `docs/images/37-cut-out-join.png`: a before / after pair (like `08-edit-actions.png`): on the left the crop dialog in *Horizontal band* mode with a band selected across a long response; on the right the result after *Cut out and join* (the two parts now directly above each other).
+
+   You can cut several bands one after another (for example rows, then columns); **Undo** steps back one action. Cutting everything is refused. If the cut is at the very start of the layer, the rest of it stays where it was on the canvas; otherwise the layer keeps its top-left position and the lower / right part moves up / left.
 4. **Done** applies the result to the layer, **Cancel** discards everything.
+
+Typical use: a long response where the middle is irrelevant - select that stretch with *Horizontal band* and *Cut out and join*; the first and last parts end up directly under each other (add a `...` text layer or a separator if you want to show that something was left out).
 
 Alternative without the dialog: use **Rectangle selection** in the preview and press **Del** (erase) or **Enter** (crop).
 
@@ -566,21 +601,180 @@ scheme and recolour by hand. A terminal can be moved, resized (width) and croppe
 
 ---
 
-## 12. Undo / redo and persistence
+## 12. Undo / redo, saving and encryption
+
+### 12.1 Undo / redo
 
 **Undo / redo** (toolbar buttons, **Ctrl/Cmd+Z**, **Ctrl/Cmd+Y** or **Ctrl/Cmd+Shift+Z**) cover everything in a capture: text edits, filters,
 annotations (add / edit / delete / move / resize), layers (add / remove / reorder / duplicate / move / resize / crop), tables, terminals,
 every pencil / brush / bucket / eraser action, styles, fonts, output scale and max width. Rapid edits (typing, spinners) merge into one
 step, each drag or stroke is one step. 100 steps are kept per capture; the history itself is not saved.
 
-**Persistence.** Captures are saved automatically (about a second after every change) into the **Burp project file**, the same way Repeater
-tabs persist, and restored when the project is reopened or the extension is reloaded. Everything is kept: text, filters, annotations, layer
-positions and sizes, tables, terminals, image layers and the drawing layer, styles and output settings. Closing a tab deletes it from the project.
-Temporary projects are not saved by Burp itself, so captures vanish with them. Global settings are stored separately in Burp's user preferences.
+### 12.2 Where captures are kept
+
+Captures are saved automatically about a second after every change. **Storage...** (top bar) chooses where:
+
+| Option | What it means |
+|---|---|
+| **The Burp project file** (default) | Saved inside the project, the same way Repeater tabs persist. They come back when the project is opened again or the extension is reloaded. A *temporary* project is not saved by Burp, so captures vanish with it. |
+| **This session only** | Kept in memory while Burp is open; nothing is written anywhere. Gone when Burp closes **or when the extension is unloaded / reloaded**. |
+| **A folder** | One file per capture in `<chosen folder>/<project name>/` (the project name is made filesystem-safe). Handy for backups and for keeping evidence next to the report. The same place is the **default folder of Save PNG** (its `screenshots` sub-folder). |
+
+To change it: **Storage...** -> pick an option (for a folder, type or **Browse...** to it) -> **OK**. The open captures are written to the new place and the dialog closes; the copy in the old place is left untouched. Your choice stays as you set it while you use the other buttons in the dialog, **Cancel** (or the window's X) asks before discarding a change you did not apply, and if the move fails the dialog stays open so you can correct the folder. The **encryption buttons act immediately** (they do not wait for OK). For the folder option BurpShot refuses a folder it cannot use (not creatable, or a symbolic link where the project folder should be).
+
+![Storage dialog](docs/images/32-storage-dialog.png)
+
+What is saved: text, filters, annotations, layer positions and sizes, tables, terminals, image layers, the drawing layer, styles and output settings. **Closing a tab deletes its saved copy.** Global settings (fonts, colours, defaults) are stored separately in Burp's user preferences.
+
+Saving never freezes the interface: only the tabs that changed are copied on the UI thread (a few milliseconds); encoding, encrypting and writing run on a background thread, and unchanged images are not re-encoded. When Burp unloads the extension the pending writes are flushed with a hard time limit, so closing Burp cannot hang on BurpShot.
+
+Captures saved by earlier BurpShot versions are imported automatically the first time the new version opens the project.
+
+### 12.3 Encryption at rest
+
+Use this when captures contain client data. **Storage... -> Encrypt with a password...** (type the password twice; at least 8 characters, a long passphrase is better). From then on every capture is stored encrypted - in the project file, in the folder, and in exports.
+
+| Situation | What you see / do |
+|---|---|
+| Next time Burp opens the project | A yellow bar says the saved captures are **locked**. Click **Unlock...**, enter the password; the tabs open. |
+| Before you unlock | Nothing is readable, and **nothing is ever written in the clear**: new captures wait (marked as changed) and are saved as soon as you unlock. |
+| **Lock now** (Storage...) | Saves, wipes the key from memory and closes the capture tabs. The captures stay on disk, encrypted. |
+| **Forgot the password...** (Storage... and the yellow bar) | The way out if the password is lost: deletes the captures that are still locked, turns encryption off, and lets you set a new password. Open tabs are kept. Without the password nothing can recover that data. |
+| **Change password...** | Re-encrypts everything with the new password (you must be unlocked). |
+| **Turn off encryption** | Re-writes the captures unencrypted (asks first). |
+
+
+**What is encrypted - and what is not.** Turning encryption on does not touch everything automatically; this is the whole list:
+
+| Output | Encrypted? |
+|---|---|
+| **Saved captures** (the tabs) - in the project file, in a folder, or in memory | **Always**, while encryption is on |
+| **Save PNG...** | **Your choice, in the save dialog**: the box *Encrypt with my BurpShot password* is ticked by default when encryption is on. Ticked -> `name.png.bsv`; unticked -> a normal PNG for your report. The box is greyed out, with a reason, when encryption is off or locked. BurpShot remembers your last choice for the session. |
+| **Share...** uploads | **Your choice**: the *Encrypt with my BurpShot password* box in the Share dialog (PNG -> `name.png.bsv`, archive -> encrypted `name.burpshot`) |
+| **Copy image** (clipboard) and the **Preview window** | **Never** - they are meant to be pasted into your report |
+
+A normal PNG is exactly what goes into a report, so BurpShot never forces encryption on it: encrypt the copies that are *stored or transferred*, keep the report image plain.
+
+How it works: AES-256-GCM, with the key derived from your password by PBKDF2-HMAC-SHA256 (600,000 rounds, random salt, a fresh random IV for every file). The file header is authenticated too, so any change to a file - or a wrong password - is detected and the file is refused. A crafted file cannot make BurpShot run an expensive key derivation (the round count is range-checked).
+
+Things to know:
+* **There is no password recovery.** Lose the password and the encrypted captures are gone. Do not reuse a password you use elsewhere.
+* The password is **never stored**. It is held in memory only while unlocked and wiped on *Lock now* and when the extension unloads.
+* Encryption protects the *contents*. It does not hide that files exist: their random names, sizes and modification times, and the project / folder name, are visible. Capture titles are inside the encrypted data.
+* While unlocked, decrypted data is in Burp's memory like any other data. Use *Lock now* when you step away; use full-disk encryption for the rest.
+* **Copy image** and the **Preview window** are always plain. **Save PNG** and **Share** encrypt only when you tick the box in their dialogs (see the table above) - a PNG saved with the box unticked is an ordinary readable image.
+
+### 12.4 Opening an exported file
+
+**Storage... -> Open a capture file...** opens a `.burpshot` capture archive (as a new tab) or decrypts an encrypted file that BurpShot exported (`.burpshot` or `.png.bsv`; a decrypted PNG is shown in a window with an optional **Save as PNG...** button). If the file was encrypted with a different password than the one in use, BurpShot asks for that file's own password.
+
+### 12.5 What is read at start-up
+
+Saved captures and settings are treated as untrusted input, because a project file or a shared archive can come from anywhere:
+* No Java object deserialization, no scripting, no reflection: captures are plain JSON read by a strict, size- and depth-limited parser, plus PNG images.
+* Counts and lengths are capped (layers, annotations, table cells, text), colour / enum / number values are validated and clamped, and anything out of range makes that capture fail cleanly instead of being half-loaded. A broken capture is skipped; the others still load.
+* Images must be genuine PNGs and are checked (size and dimensions) **before** decoding, so a tiny file cannot expand into gigabytes. PNG encoding and decoding happen in memory only - no temporary files with your screenshots.
+* Archives (ZIP) accept only a fixed set of entry names (`manifest.json`, `capture.json`, `images/<hash>.png`, `output.png`). Entries are only ever read into memory, never extracted to a path, and the unpacked size is limited while reading, so path-traversal and zip-bomb tricks do nothing.
+* Loading never opens network connections, runs programs, or renders HTML. The settings read at start-up (storage mode, folder, encryption on/off) contain no secrets: no password, no keys, no credentials. The folder path is validated (absolute, normalised) and capture ids can only be UUID-like names.
 
 ---
 
-## 13. Global settings
+## 13. Share (save to remote)
+
+**Share...** (preview toolbar, next to *Save PNG...*) uploads the screenshot or the whole capture to a remote place: a server, a cloud bucket, a drive, an API.
+
+1. **What to send**: *Screenshot (PNG)* - the image as shown in the preview; or *Capture archive* - an editable copy (layers, annotations, images, plus the rendered screenshot) that can be opened again with *Storage... -> Open a capture file...*.
+2. Optionally tick **Encrypt with my BurpShot password** (needs the password to be set / unlocked first, see [12.3](#123-encryption-at-rest)). Encrypted PNGs are sent as `name.png.bsv`, archives as `name.burpshot`.
+3. Set the **File name** (the extension is added for you).
+4. Choose a **Saved destination** or a **Type**, fill in the form. Secret fields are marked with a dot.
+5. Optionally **View / edit request...** to see (and, for REST endpoints, change) the exact HTTP request, see [13.2](#132-fixed-endpoints-extra-parameters-and-the-request-view).
+6. **Test connection** checks the address and the login without leaving anything behind (where a harmless probe file has to be created it is deleted again), then **Upload**. The result shows where the file went; **Copy location** puts that address on the clipboard.
+
+![Share dialog](docs/images/34-share-dialog.png)
+
+### 13.1 Destinations and logins
+
+| Type | Login options | Notes |
+|---|---|---|
+| **HTTP(S) REST / WebDAV** | none, **username + password** (Basic), **access token** (Bearer), **API key** (in a header or in the query string), **cookie**; plus extra headers and **extra parameters** | PUT or POST, raw body or `multipart/form-data`. You decide whether the file name goes into the URL (*File name in URL*). Any 2xx is success. Works for WebDAV (Nextcloud, ownCloud), for fixed upload endpoints such as `/api/upload`, and for custom evidence APIs. The exact request can be viewed and edited. |
+| **Amazon S3 / S3-compatible** (MinIO, Wasabi, R2...) | none (public), **pre-signed URL**, **access key + secret** (+ session token) | AWS Signature V4. Custom endpoints use path-style addressing. |
+| **Google Cloud Storage** | none (public), **access token** (`gcloud auth print-access-token`), **HMAC key** (S3 interoperability), **signed URL** | You do not have to give real cloud credentials: a short-lived token or a signed URL is enough. |
+| **Dropbox** | **access token** | Folder path; add or overwrite. Up to 150 MB. |
+| **Google Drive** | **access token** | Optional parent folder ID. |
+| **Microsoft OneDrive / SharePoint** (Graph) | **access token** | Up to 4 MB per file. |
+| **Azure Blob Storage** | **SAS token** | Container URL + SAS. |
+| **FTP / FTPS** | anonymous, **username + password** | Plain FTP, explicit FTPS (AUTH TLS) or implicit FTPS (990). Creates the remote folders. |
+| **SFTP / SCP** (SSH) | **password**, **private key** (pasted or a file, optional passphrase) | See host keys below. |
+| **Network share** (SMB / NFS / UNC) | handled by your operating system | A folder path such as `\\server\share\evidence` (Windows uses your session's credentials), or a mounted path (`/mnt/share`, `/Volumes/share`, `Z:\`). BurpShot does not log in to SMB / NFS itself: connect the share first (mapped drive, mount, or just be signed in). |
+| **Local folder** | - | A folder on this machine. |
+
+### 13.2 Fixed endpoints, extra parameters and the request view
+
+Upload endpoints differ, so the generic **HTTP(S) REST** destination does not guess. Three settings control what is sent:
+
+| Setting | Values | Does |
+|---|---|---|
+| **File name in URL** | `append to URL path` (default) | `{name}` in the URL is replaced by the file name; without `{name}` the name is appended as `/<name>` (`https://host/files` -> `https://host/files/shot.png`). Good for WebDAV / object stores. |
+| | `only where {name} is` | The name is inserted only where you put `{name}`; otherwise the URL is used as typed. |
+| | `never in URL` | The URL is used exactly as typed - for a fixed endpoint such as `https://host/api/upload`. |
+| **Extra parameters** | one `name=value` per line | Blank lines and lines starting with `#` are ignored; the value is everything after the first `=`. `{name}` in a value becomes the file name. At most 30. Treated as secret (never saved in a profile), because parameters often carry keys. |
+| **Send parameters as** | `query string` / `multipart form fields` | *Query string*: appended to the URL (properly encoded, after any query already there). *Multipart form fields*: extra text parts sent **before** the file (needs *Body = multipart/form-data*). |
+
+`{name}` also works inside the values of the **extra headers** lines (for example `X-File-Name: {name}`). In multipart uploads the file part's `filename` is always the file name.
+
+**View / edit request...** shows the request that will be sent - without the file's bytes, which are one marker line - so a large PNG does not make it hard to read:
+
+```
+POST https://files.example.com/api/upload HTTP/1.1
+Host: files.example.com
+Content-Type: multipart/form-data; boundary=----BurpShot7b73609a1b07e2fd
+Content-Length: 123940
+Authorization: Bearer {{secret:token}}
+
+------BurpShot7b73609a1b07e2fd
+Content-Disposition: form-data; name="project"
+
+42
+------BurpShot7b73609a1b07e2fd
+Content-Disposition: form-data; name="file"; filename="shot.png"
+Content-Type: image/png
+
+[[BurpShot: the file contents are inserted here]]
+------BurpShot7b73609a1b07e2fd--
+```
+
+![Request editor](docs/images/35-share-request-editor.png)
+
+* **Secrets are masked** as `{{secret:...}}` tokens, so the dialog can be screenshotted or shared on screen; tick **Show secrets** to check the real values. Tokens are filled in when the request is sent.
+* The marker line `[[BurpShot: the file contents are inserted here]]` is replaced by the file. Delete it to send no file (the result then says *file not included*); it may appear only once.
+* **Edit freely**: method (PUT, POST or PATCH), URL, headers, body. **Use this request** makes the upload send your version; an *edited request will be sent* note appears under the form and **Discard edit** drops it. *Reset to generated request* starts over from the form.
+* `Host`, `Content-Length` and other connection headers are shown for information only: they are managed by the HTTP client and ignored when sending (the result tells you if any were ignored). For multipart bodies the line endings are converted to the CRLF that multipart needs.
+* If you change the form after editing, BurpShot asks whether to keep the edited request or go back to the form. If the edited URL points at a **different host** than the destination you configured and the request contains your credentials, you are asked to confirm before they are sent there.
+* The edited request goes through the same safety rules as every upload ([13.4](#134-safety-rules-built-into-every-upload)); the parser rejects other schemes than `http` / `https`, credentials in the URL, line-break / control characters in headers, more than 60 headers, and unusual methods.
+* The other HTTP-based destinations (S3, Google Cloud Storage, Dropbox, Drive, OneDrive, Azure) show their request **read-only** (signatures and tokens masked), because editing would invalidate the signature - change the destination fields instead. FTP, SFTP and folders have no HTTP request, so the button is disabled.
+
+### 13.3 Saved destinations, secrets, host keys
+
+* **Save as profile...** keeps a destination (type, server, folder, user name...) in Burp's user preferences. **No secret is ever saved**: passwords, tokens, API keys, cookies, private keys, pre-signed URLs and extra headers are not written to disk. With *Remember secrets for this session* ticked they stay in memory until Burp closes, the extension unloads, or you *Lock now*; otherwise you type them each time.
+* **SSH host keys** are checked **before** any password or key is sent. The first time a server is used you see its fingerprint and decide whether to trust it; the trusted fingerprint is remembered per `host:port`. If it later **changes**, the connection is refused unless you explicitly confirm a strong warning.
+![SSH host key prompt](docs/images/36-ssh-host-key.png)
+
+* Only modern SSH algorithms are enabled (Ed25519, ECDSA, `rsa-sha2-*`, AES-GCM / CTR, SHA-2 MACs). A server that offers only CBC, 3DES or SHA-1 `ssh-rsa` is refused with a clear message.
+
+### 13.4 Safety rules built into every upload
+
+* **TLS verification is on.** *Skip TLS certificate verification (INSECURE)* exists for internal servers with self-signed certificates; it applies to that one connection only and the dialog warns you. Plain FTP and `http://` URLs ask for confirmation, because anything on the network path can read them.
+* **Redirects are never followed**, so credentials cannot be forwarded to another host. A redirect is reported as an error.
+* Only `http` and `https` URLs are accepted; URLs with embedded credentials are rejected.
+* **Secrets are removed from every message** shown or logged. File names and remote paths are sanitised (no `..`, separators or control characters); header values and FTP commands are checked for line-break injection.
+* Timeouts: 15 s to connect, 120 s per request. Files up to 256 MB.
+* The upload runs in the background; the interface stays usable. Nothing is sent until you press **Upload**, and **Test connection** never sends your screenshot.
+
+Limits: uploads overwrite a file of the same name on share / FTP / SFTP; there are no resumable or chunked uploads (hence the size limits for Dropbox and OneDrive); SCP needs the target folder to exist and cannot be probed by *Test connection*; real Dropbox, Drive, Graph, GCS and Azure services and S3 virtual-hosted addressing were not available for testing here (their request formats are covered by mock servers, S3 signing by AWS's published test vectors).
+
+---
+
+## 14. Global settings
 
 Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply immediately).
 
@@ -597,7 +791,7 @@ Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply i
 
 ---
 
-## 14. Keyboard and mouse reference
+## 15. Keyboard and mouse reference
 
 | Input | Where | Does |
 |---|---|---|
@@ -621,7 +815,7 @@ Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply i
 
 ---
 
-## 15. Notes and limits
+## 16. Notes and limits
 
 * **Pixelate / blur** only change the exported pixels; the original data never leaves the tab. Use a large cell size for secrets - light
   blur or tiny cells can sometimes be reversed.
@@ -636,3 +830,5 @@ Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply i
   may only be available as an image snapshot. Tables are limited to 200 rows.
 * **Terminal colours** come only from ANSI escape codes in the pasted text; BurpShot cannot read colours out of another window.
 * **Scale, width and recoloured schemes** are saved per capture.
+* **Copy image** and the **Preview window** produce plain images by design. Encryption applies to saved captures, and - when you tick the box - to **Save PNG** and **Share** (see the table in [12.3](#123-encryption-at-rest)).
+* Saved captures from a project can only be opened by BurpShot with the same (or a newer) version; an archive made by a newer version is refused with a message.

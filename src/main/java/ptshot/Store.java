@@ -4,6 +4,7 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -26,20 +27,36 @@ final class Store {
 
     /** Cheap fingerprint of a capture's editable state (images by identity), used by undo/redo to skip no-op changes. */
     static String signature(double scale, int maxWidth, List<Block> blocks) {
-        return build("", scale, maxWidth, blocks, false);
+        return build("", scale, maxWidth, blocks, 0, null);
     }
 
+    /** Where image pixels go when they are kept next to the JSON instead of inside it (capture archives). */
+    interface Images {
+        /** Stores the image and returns the reference written into the JSON. */
+        String put(BufferedImage img) throws IOException;
+
+        /** Returns the image for a reference read from the JSON (null if unknown). Must validate / limit what it decodes. */
+        BufferedImage get(String ref) throws IOException;
+    }
+
+    /** Legacy format: images inline as base64 (still read for old project data and used by the self-tests). */
     static String serialize(String title, double scale, int maxWidth, List<Block> blocks) {
-        return build(title, scale, maxWidth, blocks, true);
+        return build(title, scale, maxWidth, blocks, 1, null);
     }
 
-    private static String build(String title, double scale, int maxWidth, List<Block> blocks, boolean images) {
+    /** Current format: images are handed to {@code io} and only referenced from the JSON. */
+    static String serializeRef(String title, double scale, int maxWidth, List<Block> blocks, Images io) {
+        return build(title, scale, maxWidth, blocks, 2, io);
+    }
+
+    /** mode 0 = fingerprint only (undo), 1 = images inline (legacy), 2 = images by reference. */
+    private static String build(String title, double scale, int maxWidth, List<Block> blocks, int mode, Images io) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("title", title);
         m.put("scale", scale);
         m.put("maxWidth", maxWidth);
         List<Object> bl = new ArrayList<>();
-        for (Block b : blocks) bl.add(block(b, images));
+        for (Block b : blocks) bl.add(block(b, mode, io));
         m.put("blocks", bl);
         return Mini.write(m);
     }
@@ -48,7 +65,7 @@ final class Store {
         return c == null ? null : (Object) (c.getRGB() & 0xffffff);
     }
 
-    private static Map<String, Object> block(Block b, boolean images) {
+    private static Map<String, Object> block(Block b, int mode, Images io) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("kind", b.kind.name());
         m.put("showLabel", b.showLabel);
@@ -86,14 +103,18 @@ final class Store {
         List<Object> rl = new ArrayList<>();
         for (List<String> r : b.rows) rl.add(new ArrayList<Object>(r));
         m.put("rows", rl);
-        if (b.image != null && !images) {
+        if (b.image != null && mode == 0) {
             m.put("imageId", System.identityHashCode(b.image) + ":" + b.image.getWidth() + "x" + b.image.getHeight());
-        } else if (b.image != null) {
+        } else if (b.image != null && mode == 1) {
             try {
-                ByteArrayOutputStream o = new ByteArrayOutputStream();
-                ImageIO.write(b.image, "png", o);
-                m.put("image", Base64.getEncoder().encodeToString(o.toByteArray()));
+                m.put("image", Base64.getEncoder().encodeToString(Png.encode(b.image)));
             } catch (Exception ignored) {
+            }
+        } else if (b.image != null && mode == 2) {
+            try {
+                m.put("imageRef", io.put(b.image));
+            } catch (IOException e) {
+                throw new IllegalStateException("could not store an image", e);
             }
         }
         m.put("incFirst", b.incFirst);
@@ -145,15 +166,86 @@ final class Store {
 
     // ------------------------------------------------------------------ load
 
-    @SuppressWarnings("unchecked")
     static Restored deserialize(String json) {
-        Map<String, Object> m = (Map<String, Object>) Mini.parse(json);
+        return deserialize(json, null);
+    }
+
+    static final int MAX_BLOCKS = 500, MAX_ANNOTATIONS = 2000, MAX_ROWS = 5000, MAX_COLS = 200, MAX_TEXT = 8_000_000;
+
+    /**
+     * Reads a capture. The data is untrusted: it is parsed by a depth- and size-limited JSON parser (no Java deserialization, no
+     * reflection, nothing is executed or fetched), counts and lengths are capped, enum / number / colour values are validated and
+     * clamped, and images must be small, valid PNGs. Anything out of range makes the whole capture fail with an
+     * IllegalArgumentException instead of being half-loaded.
+     */
+    @SuppressWarnings("unchecked")
+    static Restored deserialize(String json, Images io) {
+        Object root = Mini.parse(json);
+        if (!(root instanceof Map)) throw new IllegalArgumentException("not a capture");
+        Map<String, Object> m = (Map<String, Object>) root;
         Restored r = new Restored();
-        r.title = str(m, "title", "capture");
-        r.scale = num(m, "scale", 2.0);
-        r.maxWidth = (int) num(m, "maxWidth", -1);
-        for (Object o : (List<Object>) m.getOrDefault("blocks", new ArrayList<>())) r.blocks.add(block((Map<String, Object>) o));
+        r.title = cut(str(m, "title", "capture"), 200);
+        r.scale = fin(num(m, "scale", 2.0), 0.5, 8, 2.0);
+        r.maxWidth = (int) fin(num(m, "maxWidth", -1), -1, 20000, -1);
+        Object bo = m.get("blocks");
+        List<Object> bl = bo instanceof List ? (List<Object>) bo : new ArrayList<>();
+        if (bl.size() > MAX_BLOCKS) throw new IllegalArgumentException("too many blocks");
+        for (Object o : bl) {
+            if (!(o instanceof Map)) throw new IllegalArgumentException("bad block");
+            r.blocks.add(block((Map<String, Object>) o, io));
+        }
         return r;
+    }
+
+    private static String cut(String s, int max) {
+        return s.length() > max ? s.substring(0, max) : s;
+    }
+
+    /** Finite number within [lo, hi], else the default (NaN / Infinity from hostile data become the default). */
+    private static double fin(double v, double lo, double hi, double d) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return d;
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static void sanitize(Block b) {
+        b.label = cut(b.label, 500);
+        b.title = cut(b.title == null ? "" : b.title, 300);
+        if (b.original.length() > MAX_TEXT || b.text.length() > MAX_TEXT || b.raw.length() > MAX_TEXT) throw new IllegalArgumentException("text too large");
+        b.align = (int) fin(b.align, 0, 2, 0);
+        b.imageMaxWidth = (int) fin(b.imageMaxWidth, 40, 20000, 500);
+        b.offX = fin(b.offX, -100000, 100000, 0);
+        b.offY = fin(b.offY, -100000, 100000, 0);
+        b.boxW = fin(b.boxW, 0, 20000, 0);
+        b.imageW = fin(b.imageW, 0, 20000, 0);
+        b.wrapCols = (int) fin(b.wrapCols, 0, 2000, 100);
+        b.maxLines = (int) fin(b.maxLines, 0, 5000, 30);
+        b.maxBodyChars = (int) fin(b.maxBodyChars, 0, 50_000_000, 0);
+        b.sepWidth = (int) fin(b.sepWidth, 0, 100, 0);
+        if (!"DARK".equals(b.theme) && !"LIGHT".equals(b.theme)) b.theme = "DARK";
+        boolean okChrome = false;
+        for (String c : Term.CHROMES) okChrome |= c.equals(b.chrome);
+        if (!okChrome) b.chrome = "NONE";
+        b.preset = cut(b.preset, 64);
+        for (Annotation a : b.annotations) {
+            a.anchor = cut(a.anchor == null ? "" : a.anchor, 2000);
+            a.occurrence = (int) fin(a.occurrence, 0, 100000, 0);
+            a.width = fin(a.width, 0.5, 100, 2);
+            a.pad = (int) fin(a.pad, -50, 200, 3);
+            a.angle = fin(a.angle, -720, 720, 90);
+            a.length = (int) fin(a.length, 1, 5000, 90);
+            a.headSize = (int) fin(a.headSize, 1, 500, 16);
+            a.dx = (int) fin(a.dx, -5000, 5000, 0);
+            a.dy = (int) fin(a.dy, -5000, 5000, 0);
+            a.offL = fin(a.offL, -20000, 20000, 0);
+            a.offT = fin(a.offT, -20000, 20000, 0);
+            a.offR = fin(a.offR, -20000, 20000, 0);
+            a.offB = fin(a.offB, -20000, 20000, 0);
+            a.strength = (int) fin(a.strength, 1, 200, 8);
+            a.fx = fin(a.fx, -100000, 100000, 0);
+            a.fy = fin(a.fy, -100000, 100000, 0);
+            a.fw = fin(a.fw, 0, 100000, 0);
+            a.fh = fin(a.fh, 0, 100000, 0);
+        }
     }
 
     private static String str(Map<String, Object> m, String k, String d) {
@@ -177,7 +269,7 @@ final class Store {
     }
 
     @SuppressWarnings("unchecked")
-    private static Block block(Map<String, Object> m) {
+    private static Block block(Map<String, Object> m, Images io) {
         Block b = new Block();
         b.kind = Block.Kind.valueOf(str(m, "kind", "CUSTOM"));
         b.showLabel = bool(m, "showLabel", true);
@@ -213,15 +305,25 @@ final class Store {
             b.palette = new Color[16];
             for (int i = 0; i < 16; i++) b.palette[i] = new Color(((Number) ((List<Object>) po).get(i)).intValue());
         }
-        for (Object ro : (List<Object>) m.getOrDefault("rows", new ArrayList<>())) {
+        List<Object> rowList = (List<Object>) m.getOrDefault("rows", new ArrayList<>());
+        if (rowList.size() > MAX_ROWS) throw new IllegalArgumentException("too many table rows");
+        for (Object ro : rowList) {
+            List<Object> cells = (List<Object>) ro;
+            if (cells.size() > MAX_COLS) throw new IllegalArgumentException("too many table columns");
             List<String> r = new ArrayList<>();
-            for (Object co : (List<Object>) ro) r.add(String.valueOf(co));
+            for (Object co : cells) r.add(cut(String.valueOf(co), 5000));
             b.rows.add(r);
         }
-        String img = str(m, "image", null);
-        if (img != null) {
+        String img = str(m, "image", null), ref = str(m, "imageRef", null);
+        if (img != null && img.length() <= Png.MAX_BYTES * 4L / 3 + 16) {
             try {
-                b.image = ImageIO.read(new ByteArrayInputStream(Base64.getDecoder().decode(img)));
+                b.image = Png.decode(Base64.getDecoder().decode(img));
+            } catch (Exception ignored) {
+                // an unreadable image is dropped; the rest of the capture still loads
+            }
+        } else if (ref != null && io != null) {
+            try {
+                b.image = io.get(ref);
             } catch (Exception ignored) {
             }
         }
@@ -230,8 +332,8 @@ final class Store {
         b.incBody = bool(m, "incBody", true);
         b.pretty = bool(m, "prettyJson", false);
         b.maxBodyChars = (int) num(m, "maxBodyChars", 0);
-        for (Object o : (List<Object>) m.getOrDefault("hiddenHeaders", new ArrayList<>())) b.hiddenHeaders.add(((Number) o).intValue());
-        for (Object o : (List<Object>) m.getOrDefault("hiddenParams", new ArrayList<>())) b.hiddenParams.add(((Number) o).intValue());
+        for (Object o : capped((List<Object>) m.getOrDefault("hiddenHeaders", new ArrayList<>()))) b.hiddenHeaders.add(((Number) o).intValue());
+        for (Object o : capped((List<Object>) m.getOrDefault("hiddenParams", new ArrayList<>()))) b.hiddenParams.add(((Number) o).intValue());
         b.wrapCols = (int) num(m, "wrapCols", 100);
         b.maxLines = (int) num(m, "maxLines", 30);
         b.wrap = bool(m, "wrap", true);
@@ -239,7 +341,7 @@ final class Store {
         b.separatorAfter = bool(m, "separatorAfter", false);
         b.sepColor = col(m, "sepColor");
         b.sepWidth = (int) num(m, "sepWidth", 0);
-        for (Object o : (List<Object>) m.getOrDefault("annotations", new ArrayList<>())) {
+        for (Object o : annotationList(m)) {
             Map<String, Object> x = (Map<String, Object>) o;
             Annotation a = Annotation.create(Annotation.Type.valueOf(str(x, "type", "BOX")), str(x, "anchor", ""), (int) num(x, "occurrence", 0));
             Color c = col(x, "color");
@@ -266,7 +368,21 @@ final class Store {
             a.fh = num(x, "fh", 0);
             b.annotations.add(a);
         }
+        sanitize(b);
         return b;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> annotationList(Map<String, Object> m) {
+        List<Object> l = (List<Object>) m.getOrDefault("annotations", new ArrayList<>());
+        if (l.size() > MAX_ANNOTATIONS) throw new IllegalArgumentException("too many annotations");
+        for (Object o : l) if (!(o instanceof Map)) throw new IllegalArgumentException("bad annotation");
+        return l;
+    }
+
+    private static List<Object> capped(List<Object> l) {
+        if (l.size() > 20000) throw new IllegalArgumentException("list too long");
+        return l;
     }
 }
 
@@ -315,77 +431,132 @@ final class Mini {
         } else w(sb, o.toString());
     }
 
+    static final int MAX_DEPTH = 40;
+    static final long MAX_NODES = 3_000_000L;
+
+    /**
+     * Strict, limited JSON reader for untrusted data: nesting is capped (no stack overflow), the number of values is capped, every
+     * malformed input ends in an IllegalArgumentException (never an Error), and trailing garbage is rejected.
+     */
     static Object parse(String s) {
-        int[] p = {0};
-        Object o = val(s, p);
+        P p = new P(s);
+        Object o = p.val(0);
+        p.ws();
+        if (p.i != s.length()) throw p.err();
         return o;
     }
 
-    private static void ws(String s, int[] p) {
-        while (p[0] < s.length() && Character.isWhitespace(s.charAt(p[0]))) p[0]++;
-    }
+    private static final class P {
+        final String s;
+        int i;
+        long nodes;
 
-    private static Object val(String s, int[] p) {
-        ws(s, p);
-        char c = s.charAt(p[0]);
-        if (c == '{') {
-            p[0]++;
-            Map<String, Object> m = new LinkedHashMap<>();
-            ws(s, p);
-            if (s.charAt(p[0]) == '}') {
-                p[0]++;
-                return m;
+        P(String s) {
+            this.s = s;
+        }
+
+        IllegalArgumentException err() {
+            return new IllegalArgumentException("malformed capture data");
+        }
+
+        void ws() {
+            while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        }
+
+        char peek() {
+            if (i >= s.length()) throw err();
+            return s.charAt(i);
+        }
+
+        Object val(int depth) {
+            if (depth > MAX_DEPTH || ++nodes > MAX_NODES) throw new IllegalArgumentException("capture data too complex");
+            ws();
+            char c = peek();
+            if (c == '{') {
+                i++;
+                Map<String, Object> m = new LinkedHashMap<>();
+                ws();
+                if (peek() == '}') {
+                    i++;
+                    return m;
+                }
+                while (true) {
+                    ws();
+                    if (peek() != '"') throw err();
+                    String k = str();
+                    ws();
+                    if (peek() != ':') throw err();
+                    i++;
+                    m.put(k, val(depth + 1));
+                    ws();
+                    char d = peek();
+                    i++;
+                    if (d == '}') return m;
+                    if (d != ',') throw err();
+                }
             }
-            while (true) {
-                ws(s, p);
-                String k = (String) val(s, p);
-                ws(s, p);
-                p[0]++; // ':'
-                m.put(k, val(s, p));
-                ws(s, p);
-                if (s.charAt(p[0]++) == '}') return m;
+            if (c == '[') {
+                i++;
+                List<Object> l = new ArrayList<>();
+                ws();
+                if (peek() == ']') {
+                    i++;
+                    return l;
+                }
+                while (true) {
+                    l.add(val(depth + 1));
+                    ws();
+                    char d = peek();
+                    i++;
+                    if (d == ']') return l;
+                    if (d != ',') throw err();
+                }
+            }
+            if (c == '"') return str();
+            if (s.startsWith("true", i)) { i += 4; return Boolean.TRUE; }
+            if (s.startsWith("false", i)) { i += 5; return Boolean.FALSE; }
+            if (s.startsWith("null", i)) { i += 4; return null; }
+            int st = i;
+            while (i < s.length() && "+-.eE0123456789".indexOf(s.charAt(i)) >= 0) i++;
+            if (i == st) throw err();
+            try {
+                return Double.parseDouble(s.substring(st, i));
+            } catch (NumberFormatException e) {
+                throw err();
             }
         }
-        if (c == '[') {
-            p[0]++;
-            List<Object> l = new ArrayList<>();
-            ws(s, p);
-            if (s.charAt(p[0]) == ']') {
-                p[0]++;
-                return l;
-            }
-            while (true) {
-                l.add(val(s, p));
-                ws(s, p);
-                if (s.charAt(p[0]++) == ']') return l;
-            }
-        }
-        if (c == '"') {
-            p[0]++;
+
+        String str() {
+            i++; // opening quote
             StringBuilder sb = new StringBuilder();
-            while (s.charAt(p[0]) != '"') {
-                char ch = s.charAt(p[0]++);
-                if (ch == '\\') {
-                    char e = s.charAt(p[0]++);
-                    switch (e) {
-                        case 'n': sb.append('\n'); break;
-                        case 'r': sb.append('\r'); break;
-                        case 't': sb.append('\t'); break;
-                        case 'b': sb.append('\b'); break;
-                        case 'f': sb.append('\f'); break;
-                        case 'u': sb.append((char) Integer.parseInt(s.substring(p[0], p[0] + 4), 16)); p[0] += 4; break;
-                        default: sb.append(e);
-                    }
-                } else sb.append(ch);
+            while (true) {
+                char ch = peek();
+                i++;
+                if (ch == '"') return sb.toString();
+                if (ch != '\\') {
+                    sb.append(ch);
+                    continue;
+                }
+                char e = peek();
+                i++;
+                switch (e) {
+                    case 'n': sb.append('\n'); break;
+                    case 'r': sb.append('\r'); break;
+                    case 't': sb.append('\t'); break;
+                    case 'b': sb.append('\b'); break;
+                    case 'f': sb.append('\f'); break;
+                    case 'u':
+                        if (i + 4 > s.length()) throw err();
+                        try {
+                            sb.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                        } catch (NumberFormatException ex) {
+                            throw err();
+                        }
+                        i += 4;
+                        break;
+                    default: sb.append(e);
+                }
             }
-            p[0]++;
-            return sb.toString();
         }
-        if (s.startsWith("true", p[0])) { p[0] += 4; return Boolean.TRUE; }
-        if (s.startsWith("false", p[0])) { p[0] += 5; return Boolean.FALSE; }
-        if (s.startsWith("null", p[0])) { p[0] += 4; return null; }
-        int st = p[0];
-        while (p[0] < s.length() && "+-.eE0123456789".indexOf(s.charAt(p[0])) >= 0) p[0]++;
-        return Double.parseDouble(s.substring(st, p[0]));
     }
 }

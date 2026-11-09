@@ -23,6 +23,9 @@ import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JOptionPane;
+import javax.swing.JRadioButton;
+import javax.swing.ButtonGroup;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.Scrollable;
@@ -33,6 +36,7 @@ final class SelectPanel extends JPanel implements Scrollable {
     private BufferedImage img;
     private double zoom = 0; // 0 = fit
     private Rectangle sel;   // image pixels
+    private int mode;        // 0 = rectangle, 1 = horizontal band (full width), 2 = vertical band (full height)
     private Point anchor;
 
     SelectPanel() {
@@ -63,6 +67,14 @@ final class SelectPanel extends JPanel implements Scrollable {
         repaint();
     }
 
+    /** 0 = free rectangle, 1 = horizontal band across the whole width, 2 = vertical band down the whole height. Clears the selection. */
+    void setMode(int m) {
+        mode = m;
+        sel = null;
+        repaint();
+        firePropertyChange("selection", null, null);
+    }
+
     void setZoom(double z) {
         zoom = z;
         revalidate();
@@ -76,6 +88,13 @@ final class SelectPanel extends JPanel implements Scrollable {
         int y1 = Math.max(0, Math.min(img.getHeight(), Math.min(a.y, b.y)));
         int x2 = Math.max(0, Math.min(img.getWidth(), Math.max(a.x, b.x)));
         int y2 = Math.max(0, Math.min(img.getHeight(), Math.max(a.y, b.y)));
+        if (mode == 1) { // "ray" selection: the whole width, only the dragged height
+            x1 = 0;
+            x2 = img.getWidth();
+        } else if (mode == 2) { // the whole height, only the dragged width
+            y1 = 0;
+            y2 = img.getHeight();
+        }
         sel = new Rectangle(x1, y1, x2 - x1, y2 - y1);
         repaint();
         firePropertyChange("selection", null, sel);
@@ -190,6 +209,43 @@ final class ImagePicker {
         return o;
     }
 
+    /** Result of {@link #cutOutBand}: the joined image and how far its top-left corner moved in the original (kept in place on screen). */
+    static final class Cut {
+        final BufferedImage img;
+        final int dx, dy;
+
+        Cut(BufferedImage img, int dx, int dy) {
+            this.img = img;
+            this.dx = dx;
+            this.dy = dy;
+        }
+    }
+
+    /**
+     * Removes a whole band from the image and joins what is left. {@code r} is the band: for a horizontal band only its y / height
+     * matter (it spans the full width), for a vertical band only x / width (full height). The caller makes sure something remains.
+     */
+    static Cut cutOutBand(BufferedImage src, Rectangle r, boolean horizontal) {
+        int w0 = src.getWidth(), h0 = src.getHeight();
+        int removed = horizontal ? r.height : r.width;
+        BufferedImage out = new BufferedImage(horizontal ? w0 : w0 - removed, horizontal ? h0 - removed : h0, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = out.createGraphics();
+        int dx = 0, dy = 0;
+        if (horizontal) {
+            if (r.y > 0) g.drawImage(src.getSubimage(0, 0, w0, r.y), 0, 0, null);                       // part above the band
+            int below = h0 - (r.y + r.height);
+            if (below > 0) g.drawImage(src.getSubimage(0, r.y + r.height, w0, below), 0, r.y, null);   // part below, moved up
+            if (r.y == 0) dy = r.height; // the first rows are gone: the rest keeps its place on screen
+        } else {
+            if (r.x > 0) g.drawImage(src.getSubimage(0, 0, r.x, h0), 0, 0, null);                      // part left of the band
+            int right = w0 - (r.x + r.width);
+            if (right > 0) g.drawImage(src.getSubimage(r.x + r.width, 0, right, h0), r.x, 0, null);   // part right, moved left
+            if (r.x == 0) dx = r.width;
+        }
+        g.dispose();
+        return new Cut(out, dx, dy);
+    }
+
     /** Crop / cut-out dialog: select a region, then keep it (Crop) or make it transparent (Cut out). null = nothing changed. */
     static Edited edit(Window owner, String title, BufferedImage src) {
         final BufferedImage[] cur = {argb(src)};
@@ -202,23 +258,44 @@ final class ImagePicker {
         sp.setImage(cur[0]);
         JLabel info = new JLabel(" ");
         JButton crop = new JButton("Crop to selection");
-        JButton cut = new JButton("Cut out selection");
+        JButton cut = new JButton("Erase selection");
+        JButton join = new JButton("Cut out and join");
         JButton undo = new JButton("Undo");
         JButton done = new JButton("Done");
         JButton cancel = new JButton("Cancel");
         crop.setToolTipText("Keep only the selected region");
-        cut.setToolTipText("Erase the selected region (it becomes transparent)");
+        cut.setToolTipText("Erase the selected region but keep the layer's size (the area becomes transparent)");
+        join.setToolTipText("Remove the selected band completely and join the two remaining parts (use Horizontal or Vertical band)");
+        JRadioButton rbRect = new JRadioButton("Rectangle", true), rbH = new JRadioButton("Horizontal band"), rbV = new JRadioButton("Vertical band");
+        rbRect.setToolTipText("Free rectangle");
+        rbH.setToolTipText("Selects the whole width: drag up / down to choose which rows");
+        rbV.setToolTipText("Selects the whole height: drag left / right to choose which columns");
+        ButtonGroup modeGroup = new ButtonGroup();
+        modeGroup.add(rbRect);
+        modeGroup.add(rbH);
+        modeGroup.add(rbV);
+        final int[] mode = {0};
         crop.setEnabled(false);
         cut.setEnabled(false);
+        join.setEnabled(false);
         undo.setEnabled(false);
         sp.addPropertyChangeListener("selection", e -> {
             crop.setEnabled(sp.hasSelection());
             cut.setEnabled(sp.hasSelection());
+            join.setEnabled(sp.hasSelection() && mode[0] != 0);
         });
+        java.awt.event.ActionListener modeChanged = e -> {
+            mode[0] = rbH.isSelected() ? 1 : rbV.isSelected() ? 2 : 0;
+            sp.setMode(mode[0]);
+        };
+        rbRect.addActionListener(modeChanged);
+        rbH.addActionListener(modeChanged);
+        rbV.addActionListener(modeChanged);
         Runnable refresh = () -> {
             sp.setImage(cur[0]);
             crop.setEnabled(false);
             cut.setEnabled(false);
+            join.setEnabled(false);
             undo.setEnabled(!hist.isEmpty());
             info.setText("  " + cur[0].getWidth() + " x " + cur[0].getHeight() + " px");
         };
@@ -249,6 +326,26 @@ final class ImagePicker {
             changed[0] = true;
             refresh.run();
         });
+        join.addActionListener(e -> {
+            Rectangle r = sp.selRect();
+            if (r == null || mode[0] == 0) return;
+            BufferedImage src0 = cur[0];
+            int w0 = src0.getWidth(), h0 = src0.getHeight();
+            boolean horizontal = mode[0] == 1;
+            int removed = horizontal ? r.height : r.width, total = horizontal ? h0 : w0;
+            if (removed >= total) {
+                JOptionPane.showMessageDialog(d, "That would remove everything - leave some of the layer.");
+                return;
+            }
+            hist.push(new Object[]{cur[0], org[0], org[1]});
+            Cut c = cutOutBand(src0, r, horizontal);
+            org[0] += c.dx;
+            org[1] += c.dy;
+            BufferedImage out = c.img;
+            cur[0] = out;
+            changed[0] = true;
+            refresh.run();
+        });
         undo.addActionListener(e -> {
             if (hist.isEmpty()) return;
             Object[] h = hist.pop();
@@ -268,14 +365,25 @@ final class ImagePicker {
             String z = (String) zoom.getSelectedItem();
             sp.setZoom(z.equals("Fit") ? 0 : Integer.parseInt(z.replace("%", "")) / 100.0);
         });
-        JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        top.add(new JLabel("Zoom"));
-        top.add(zoom);
-        top.add(new JLabel("   Drag a rectangle, then:"));
-        top.add(crop);
-        top.add(cut);
-        top.add(undo);
-        top.add(info);
+        // two rows so that nothing is cut off at large font sizes: what to select, then what to do with it
+        JPanel row1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+        row1.add(new JLabel("Zoom"));
+        row1.add(zoom);
+        row1.add(new JLabel("   Select:"));
+        row1.add(rbRect);
+        row1.add(rbH);
+        row1.add(rbV);
+        row1.add(info);
+        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 3));
+        row2.add(new JLabel("Then:"));
+        row2.add(crop);
+        row2.add(cut);
+        row2.add(join);
+        row2.add(undo);
+        JPanel top = new JPanel();
+        top.setLayout(new javax.swing.BoxLayout(top, javax.swing.BoxLayout.Y_AXIS));
+        top.add(row1);
+        top.add(row2);
         JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
         bottom.add(done);
         bottom.add(cancel);
@@ -283,9 +391,11 @@ final class ImagePicker {
         d.getContentPane().add(new JScrollPane(sp), BorderLayout.CENTER);
         d.getContentPane().add(bottom, BorderLayout.SOUTH);
         Dimension scr = Toolkit.getDefaultToolkit().getScreenSize();
-        d.setSize(Math.min(1200, (int) (scr.width * 0.85)), Math.min(800, (int) (scr.height * 0.85)));
-        d.setLocationRelativeTo(owner);
         refresh.run();
+        // wide enough for the toolbar at the current font size (Burp's UI scale can make the buttons much wider), but never off-screen
+        int need = Math.max(row1.getPreferredSize().width, row2.getPreferredSize().width) + 40;
+        d.setSize(Math.min(scr.width - 20, Math.max(Math.min(1200, (int) (scr.width * 0.85)), need)), Math.min(800, (int) (scr.height * 0.85)));
+        d.setLocationRelativeTo(owner);
         d.setVisible(true);
         return result[0];
     }
@@ -339,7 +449,8 @@ final class ImagePicker {
         d.getContentPane().add(new JScrollPane(sp), BorderLayout.CENTER);
         d.getContentPane().add(bottom, BorderLayout.SOUTH);
         Dimension scr = Toolkit.getDefaultToolkit().getScreenSize();
-        d.setSize(Math.min(1300, (int) (scr.width * 0.9)), Math.min(850, (int) (scr.height * 0.9)));
+        int need = Math.max(top.getPreferredSize().width, bottom.getPreferredSize().width) + 40; // toolbar must fit at large font sizes
+        d.setSize(Math.min(scr.width - 20, Math.max(Math.min(1300, (int) (scr.width * 0.9)), need)), Math.min(850, (int) (scr.height * 0.9)));
         d.setLocationRelativeTo(owner);
         d.setVisible(true); // modal: returns when closed
         return result[0];

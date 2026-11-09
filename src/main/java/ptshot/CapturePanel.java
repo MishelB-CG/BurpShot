@@ -65,6 +65,10 @@ final class CapturePanel extends JPanel {
     private double scale;
     private int maxWidth;
     private BufferedImage last;
+    /** Stable id of this capture in the saved data (set by the tab container). */
+    String captureId;
+    /** Tab title, for default file names (set by the tab container). */
+    java.util.function.Supplier<String> titleSupplier = () -> "capture";
     private Renderer.Result lastRes;
     private final javax.swing.Timer timer;
     private final JLabel status = new JLabel(" ");
@@ -267,7 +271,7 @@ final class CapturePanel extends JPanel {
             t.setMargin(new java.awt.Insets(5, 14, 5, 14));
             t.addActionListener(e -> viewChanged());
         }
-        viewPretty.setToolTipText("Re-indent JSON / XML / HTML bodies (like Burp's Pretty view)");
+        viewPretty.setToolTipText("Re-indent JSON, XML, HTML (with inline script and style), JavaScript and CSS bodies (like Burp's Pretty view)");
         viewRaw.setToolTipText("Show the body exactly as captured");
         for (JCheckBox c : new JCheckBox[]{incFirst, incHeaders, incBody}) c.addActionListener(e -> filtersChanged());
         hdrList = new Checklist("Headers");
@@ -555,6 +559,7 @@ final class CapturePanel extends JPanel {
         row1.add(btn("Preview window", "Open the preview in its own window (screenshot it with an external tool)", e -> openWindow()));
         row1.add(btn("Copy image", "Copy the PNG to the clipboard", e -> copy()));
         row1.add(btn("Save PNG...", "Save as PNG", e -> save()));
+        row1.add(btn("Share...", "Upload the screenshot or the capture to a remote place (SFTP, FTP, S3, Google Cloud, Dropbox, Drive, HTTP API, network share...)", e -> share()));
         row1.add(btn("Global settings...", "Default fonts, colours, separator, syntax colours...", e -> openSettings.run()));
         row1.add(btn("Close capture", "Close this capture", e -> onClose.run()));
         row2.add(new JLabel("Zoom"));
@@ -1948,6 +1953,12 @@ final class CapturePanel extends JPanel {
         win.setVisible(true);
     }
 
+    /** Stops the background timers (the tab is going away or the extension is unloading). */
+    void stopTimers() {
+        timer.stop();
+        if (histTimer != null) histTimer.stop();
+    }
+
     void disposeWindows() {
         if (win != null) win.dispose();
     }
@@ -1971,17 +1982,48 @@ final class CapturePanel extends JPanel {
         status.setText("Copied " + img.getWidth() + " x " + img.getHeight() + " px image to the clipboard.");
     }
 
+    private void share() {
+        BufferedImage img = renderNow();
+        String title = titleSupplier.get();
+        Persist.Snap snap = new Persist.Snap(captureId == null ? java.util.UUID.randomUUID().toString() : captureId, title, scale, maxWidth, blocks());
+        ShareDialog.open(SwingUtilities.getWindowAncestor(this), img, snap, ShareDialog.suggestedName(title));
+    }
+
+    /** The Save PNG checkbox remembers the last choice for this session (default: encrypt, whenever encryption is on). */
+    private static boolean lastEncryptChoice = true;
+
     private void save() {
         JFileChooser fc = new JFileChooser();
         fc.setFileFilter(new FileNameExtensionFilter("PNG image", "png"));
+        File shotDir = Persist.defaultShotDir();
+        if (shotDir != null) fc.setCurrentDirectory(shotDir);
         fc.setSelectedFile(new File("screenshot.png"));
+        // encryption option: follows the BurpShot encryption setting (Storage...)
+        int encState = Persist.screenshotEncryptionState();
+        JCheckBox enc = new JCheckBox("Encrypt with my BurpShot password");
+        String[] noteLines;
+        if (encState == 2) {
+            enc.setSelected(lastEncryptChoice);
+            noteLines = new String[]{"Saved as <name>.png.bsv.", "Open it again with Storage... >", "Open a capture file...", "Untick for a normal PNG (for the report)."};
+        } else if (encState == 1) {
+            enc.setEnabled(false);
+            noteLines = new String[]{"Encryption is on but locked.", "Unlock it first (yellow bar or Storage...)."};
+        } else {
+            enc.setEnabled(false);
+            noteLines = new String[]{"Encryption is off.", "Turn it on under Storage... to be able", "to save encrypted screenshots."};
+        }
+        JPanel acc = new JPanel(new BorderLayout(0, 6));
+        acc.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 0));
+        acc.add(enc, BorderLayout.NORTH);
+        acc.add(Txt.lines(true, noteLines), BorderLayout.CENTER);
+        fc.setAccessory(acc);
         Component parent = SwingUtilities.getWindowAncestor(this);
         if (fc.showSaveDialog(parent) != JFileChooser.APPROVE_OPTION) return;
-        File f = fc.getSelectedFile();
-        if (!f.getName().toLowerCase().endsWith(".png")) f = new File(f.getPath() + ".png");
+        boolean encrypted = enc.isEnabled() && enc.isSelected();
+        if (enc.isEnabled()) lastEncryptChoice = encrypted;
         try {
-            ImageIO.write(renderNow(), "png", f);
-            status.setText("Saved " + f.getName());
+            File out = Persist.writeScreenshot(fc.getSelectedFile(), renderNow(), encrypted);
+            status.setText("Saved " + out.getName() + (encrypted ? " (encrypted)" : " (not encrypted)"));
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Save failed: " + ex.getMessage());
         }

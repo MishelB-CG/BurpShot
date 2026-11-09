@@ -17,6 +17,8 @@ final class Pretty {
         String ct = contentType == null ? "" : contentType.toLowerCase();
         String t = body.trim();
         try {
+            if (ct.contains("javascript") || ct.contains("ecmascript") || ct.contains("x-js") || ct.contains("jscript")) return Beautify.js(body);
+            if (ct.contains("text/css")) return Beautify.css(body);
             boolean json = ct.contains("json") || (!ct.contains("xml") && !ct.contains("html") && (t.startsWith("{") || t.startsWith("[")));
             if (json && (t.startsWith("{") || t.startsWith("["))) return Json.pretty(t);
             boolean html = ct.contains("html") || (ct.isEmpty() && t.regionMatches(true, 0, "<!doctype html", 0, 14)) || (ct.isEmpty() && t.regionMatches(true, 0, "<html", 0, 5));
@@ -42,7 +44,7 @@ final class Pretty {
         return body;
     }
 
-    private static final int OPEN = 0, CLOSE = 1, SELF = 2, TEXT = 3, OTHER = 4;
+    private static final int OPEN = 0, CLOSE = 1, SELF = 2, TEXT = 3, OTHER = 4, RAW = 5;
 
     private static final class Tok {
         final int type;
@@ -92,7 +94,9 @@ final class Pretty {
                         int close = indexOfIgnoreCase(s, "</" + nm, end);
                         if (close > end) {
                             String raw = s.substring(end, close).trim();
-                            if (!raw.isEmpty()) toks.add(new Tok(TEXT, raw, null));
+                            if (nm.equalsIgnoreCase("style")) raw = Beautify.css(raw);
+                            else if (jsType(tag)) raw = Beautify.js(raw);
+                            if (!raw.isEmpty()) toks.add(new Tok(RAW, raw, null));
                             end = close;
                         }
                     }
@@ -131,11 +135,22 @@ final class Pretty {
                         if (!x.isEmpty()) line(o, ind, x);
                     }
                     break;
+                case RAW: // formatted script / style: keep its own indentation, shifted to the current level
+                    for (String ln : t.s.split("\n")) if (!ln.trim().isEmpty()) line(o, ind, ln.replaceAll("\\s+$", ""));
+                    break;
                 default:
                     line(o, ind, t.s);
             }
         }
         return o.toString();
+    }
+
+    /** A <script> whose type is JavaScript (no type, text/javascript, module...) - not JSON, templates or other data blocks. */
+    private static boolean jsType(String tag) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\btype\\s*=\\s*[\"']?([^\"'\\s>]*)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(tag);
+        if (!m.find()) return true;
+        String t = m.group(1).toLowerCase();
+        return t.isEmpty() || t.equals("module") || t.contains("javascript") || t.contains("ecmascript");
     }
 
     private static void line(StringBuilder o, int ind, String s) {
