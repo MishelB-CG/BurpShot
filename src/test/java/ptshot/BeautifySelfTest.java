@@ -46,6 +46,14 @@ public class BeautifySelfTest {
         for (int i = 0; i < 40000; i++) big.append("function f").append(i).append("(a,b){return a+b*").append(i).append("}");
         String bo = Beautify.js(big.toString());
         check("3 MB bundle formats fast (" + (System.nanoTime() - t0) / 1000000 + " ms)", bo.split("\n").length > 100000 && (System.nanoTime() - t0) < 3_000_000_000L);
+        StringBuilder map = new StringBuilder("{\"version\":3,\"file\":\"main.js\",\"mappings\":\"");
+        for (int i = 0; i < 600000; i++) map.append("gBAAIA,ECCAC,");
+        map.append("\"}");
+        long t1 = System.nanoTime();
+        String mo = Pretty.foldLongLines(Pretty.format(map.toString(), "application/json"));
+        long maxLine = 0;
+        for (String ln : mo.split("\n")) maxLine = Math.max(maxLine, ln.length());
+        check("source map: huge mappings line is cut (" + mo.length() + " chars left, " + (System.nanoTime() - t1) / 1000000 + " ms)", maxLine < Pretty.MAX_LINE + 100 && mo.contains("more characters not shown") && mo.contains("\"version\":3") && mo.contains("\"file\""));
         dbg(js, out);
         dbg(css, co);
         System.out.println(fails == 0 ? "\nALL PASSED" : "\n" + fails + " FAILED");

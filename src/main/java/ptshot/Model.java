@@ -342,6 +342,7 @@ final class Block {
             } else if (pretty) {
                 body = Pretty.format(body, headerValue("content-type"));
             }
+            body = Pretty.foldLongLines(body);
             if (maxBodyChars > 0 && body.length() > maxBodyChars) body = body.substring(0, maxBodyChars) + "\n...";
             if (sb.length() > 0) sb.append('\n');
             sb.append(body);

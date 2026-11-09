@@ -29,6 +29,29 @@ final class Pretty {
         return body;
     }
 
+    /** Longest line shown in the editor; a single multi-megabyte line (e.g. the "mappings" of a source map) makes Swing text layout freeze. */
+    static final int MAX_LINE = 2000;
+
+    /** Cuts every line longer than {@link #MAX_LINE} and says how much was left out, so huge one-line values stay usable. */
+    static String foldLongLines(String body) {
+        if (body == null || body.length() <= MAX_LINE) return body;
+        StringBuilder o = null;
+        int n = body.length(), start = 0, copied = 0;
+        while (start <= n) {
+            int e = body.indexOf('\n', start);
+            if (e < 0) e = n;
+            if (e - start > MAX_LINE) {
+                if (o == null) o = new StringBuilder(Math.min(n, 1 << 20));
+                o.append(body, copied, start + MAX_LINE).append(" ...[").append(e - start - MAX_LINE).append(" more characters not shown]");
+                copied = e;
+            }
+            start = e + 1;
+        }
+        if (o == null) return body;
+        o.append(body, copied, n);
+        return o.toString();
+    }
+
     /** Back to a compact form (used when switching Pretty -> Raw on text that was edited by hand). */
     static String compact(String body, String contentType) {
         String ct = contentType == null ? "" : contentType.toLowerCase();
