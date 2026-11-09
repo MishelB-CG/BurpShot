@@ -64,6 +64,7 @@ final class CapturePanel extends JPanel {
     private boolean loading;
     private double scale;
     private int maxWidth;
+    private Border frame;   // border / curvature / shadow around the whole capture
     private BufferedImage last;
     /** Stable id of this capture in the saved data (set by the tab container). */
     String captureId;
@@ -81,6 +82,7 @@ final class CapturePanel extends JPanel {
         final List<Block> blocks = new ArrayList<>();
         double scale;
         int maxWidth, sel;
+        Border frame;
         String sig;
     }
 
@@ -118,6 +120,7 @@ final class CapturePanel extends JPanel {
     private FontEditor labelFont, bodyFont;
     private OptColor bgOpt, sepOpt;
     private JSpinner sepWidth, wrapCols, maxLines, imgMax;
+    private BorderEditor borderEd;
 
     CapturePanel(Settings st, List<Block> init, double scale, int maxWidth, Runnable onClose, Runnable openSettings, Runnable onChanged) {
         super(new BorderLayout());
@@ -504,6 +507,7 @@ final class CapturePanel extends JPanel {
                 styleChanged();
             }
         });
+        borderEd = new BorderEditor(this::styleChanged);
         Form f = new Form();
         f.span(Txt.heading("Label", "(the red \"Request\" / \"Response\" header)"));
         f.row("", showLabel);
@@ -519,6 +523,8 @@ final class CapturePanel extends JPanel {
         f.span(wrap);
         f.row("Max lines (0 = all)", maxLines);
         f.row("Image max width (px)", imgMax);
+        f.span(Txt.heading("Border", "(around this layer; the whole capture has its own: Border tool in the palette)"));
+        f.span(borderEd);
         f.span(Txt.heading("Layout", null));
         f.span(beside);
         f.span(sepAfter);
@@ -682,6 +688,14 @@ final class CapturePanel extends JPanel {
         p.add(paletteBtn(Icons.box(), "Box  -  adds a red rectangle in the middle of the view; drag it into place", e -> addFree(Annotation.Type.BOX)));
         p.add(paletteBtn(Icons.arrow(), "Arrow  -  adds an arrow in the middle of the view; drag it into place", e -> addFree(Annotation.Type.ARROW)));
         p.add(paletteBtn(Icons.pixelate(), "Pixelate  -  adds a pixelate area; drag / resize it over what to hide", e -> addFree(Annotation.Type.PIXELATE)));
+        JButton bord = paletteBtn(Icons.border(), "Border  -  colour, width, curvature and shadow for the selected layer or the whole screenshot", null);
+        bord.addActionListener(e -> {
+            JPopupMenu m = new JPopupMenu();
+            m.add(item("Border of the selected layer...", "Colour, width, curvature and shadow around the layer selected in the Blocks list", x -> editLayerBorder()));
+            m.add(item("Border of the whole capture...", "Colour, width, curvature and shadow around the entire screenshot", x -> editCaptureBorder()));
+            m.show(bord, bord.getWidth(), 0);
+        });
+        p.add(bord);
         p.add(paletteBtn(Icons.blur(), "Blur  -  adds a blur area; drag / resize it over what to hide", e -> addFree(Annotation.Type.BLUR)));
         p.add(javax.swing.Box.createVerticalStrut(6));
         p.add(new javax.swing.JSeparator());
@@ -719,6 +733,29 @@ final class CapturePanel extends JPanel {
         p.add(paletteBtn(Icons.crop(), "Crop / cut out parts of the selected layer", e -> cropLayer()));
         p.add(javax.swing.Box.createVerticalGlue());
         return p;
+    }
+
+    private void editCaptureBorder() {
+        BorderEditor.edit(this, "Capture border", frame, f -> {
+            frame = f;
+            refresh();
+        });
+    }
+
+    private void editLayerBorder() {
+        final Block target = cur;
+        if (target == null) {
+            JOptionPane.showMessageDialog(this, "Select a layer in the Blocks list first.");
+            return;
+        }
+        BorderEditor.edit(this, "Border of \"" + target.label + "\"", target.border, f -> {
+            target.border = f;
+            loading = true;
+            borderEd.load(f);
+            loading = false;
+            list.repaint();
+            refresh();
+        });
     }
 
     private JButton paletteBtn(javax.swing.Icon icon, String tip, java.awt.event.ActionListener l) {
@@ -943,7 +980,7 @@ final class CapturePanel extends JPanel {
             status.setText("Select a layer first.");
             return;
         }
-        java.awt.Window w = SwingUtilities.getWindowAncestor(this);
+        java.awt.Window w = Ui.window(this);
         if (cur.kind == Block.Kind.IMAGE && cur.image != null) {
             Renderer.Layer l = layerOfBlock(cur);
             double disp1x = l == null ? cur.image.getWidth() / scale : l.body.width / scale;
@@ -1000,7 +1037,7 @@ final class CapturePanel extends JPanel {
             opts.add("Image snapshot");
             opts.add("Cancel");
             String desc = c.getClass().getSimpleName() + " (" + c.getWidth() + " x " + c.getHeight() + ")";
-            int ch = JOptionPane.showOptionDialog(SwingUtilities.getWindowAncestor(this), "Picked: " + desc + "\nAdd it as:", "Pick from Burp",
+            int ch = JOptionPane.showOptionDialog(Ui.window(this), "Picked: " + desc + "\nAdd it as:", "Pick from Burp",
                     JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, opts.toArray(), opts.get(0));
             if (ch < 0 || ch >= opts.size()) return;
             String o = opts.get(ch);
@@ -1032,8 +1069,9 @@ final class CapturePanel extends JPanel {
         for (Block b : blocks()) s.blocks.add(b.duplicate());
         s.scale = scale;
         s.maxWidth = maxWidth;
+        s.frame = frame == null ? null : frame.copy();
         s.sel = list.getSelectedIndex();
-        s.sig = Store.signature(scale, maxWidth, blocks());
+        s.sig = Store.signature(scale, maxWidth, frame, blocks());
         return s;
     }
 
@@ -1044,7 +1082,7 @@ final class CapturePanel extends JPanel {
             committed = snap();
             return;
         }
-        if (Store.signature(scale, maxWidth, blocks()).equals(committed.sig)) return;
+        if (Store.signature(scale, maxWidth, frame, blocks()).equals(committed.sig)) return;
         undo.push(committed);
         while (undo.size() > 100) undo.removeLast();
         redo.clear();
@@ -1072,6 +1110,7 @@ final class CapturePanel extends JPanel {
         histTimer.stop();
         scale = s.scale;
         maxWidth = s.maxWidth;
+        frame = s.frame == null ? null : s.frame.copy();
         scaleSpin.setValue(scale);
         widthSpin.setValue(maxWidth);
         model.clear();
@@ -1242,6 +1281,17 @@ final class CapturePanel extends JPanel {
         return maxWidth;
     }
 
+    /** Border around the whole capture (null = none). */
+    Border frame() {
+        return frame == null ? null : frame.copy();
+    }
+
+    /** Sets the capture border when a saved capture is opened (not an edit: nothing is marked as changed). */
+    void setFrame(Border f) {
+        frame = f == null || f.isNone() ? null : f.copy();
+        renderNow();
+    }
+
     List<Block> blocks() {
         List<Block> l = new ArrayList<>();
         for (int i = 0; i < model.size(); i++) l.add(model.get(i));
@@ -1306,6 +1356,7 @@ final class CapturePanel extends JPanel {
         sepAfter.setSelected(b.separatorAfter);
         sepOpt.set(b.sepColor);
         sepWidth.setValue(b.sepWidth);
+        borderEd.load(b.border);
         wrapCols.setValue(b.wrapCols);
         wrap.setSelected(b.wrap);
         maxLines.setValue(b.maxLines);
@@ -1340,6 +1391,7 @@ final class CapturePanel extends JPanel {
         cur.separatorAfter = sepAfter.isSelected();
         cur.sepColor = sepOpt.get();
         cur.sepWidth = ival(sepWidth);
+        cur.border = borderEd.value();
         cur.wrapCols = ival(wrapCols);
         cur.wrap = wrap.isSelected();
         cur.maxLines = ival(maxLines);
@@ -1538,7 +1590,7 @@ final class CapturePanel extends JPanel {
         }
         final String src = html;
         BufferedImage first = Html.render(src, 700, 2.0);
-        BufferedImage out = ImagePicker.show(SwingUtilities.getWindowAncestor(this),
+        BufferedImage out = ImagePicker.show(Ui.window(this),
                 "Rendered HTML - drag to select the part to include", first, w -> Html.render(src, w, 2.0), 700);
         if (out != null) insertImage(out, 2.0);
     }
@@ -1550,12 +1602,12 @@ final class CapturePanel extends JPanel {
         JPanel p = new JPanel(new BorderLayout(0, 4));
         p.add(new JLabel("Paste or type any HTML to render (none was selected / found in the current block):"), BorderLayout.NORTH);
         p.add(new JScrollPane(area), BorderLayout.CENTER);
-        int r = JOptionPane.showConfirmDialog(SwingUtilities.getWindowAncestor(this), p, "Render HTML", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        int r = JOptionPane.showConfirmDialog(Ui.window(this), p, "Render HTML", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         return r == JOptionPane.OK_OPTION ? area.getText() : null;
     }
 
     private void screenAction() {
-        java.awt.Window w = SwingUtilities.getWindowAncestor(this);
+        java.awt.Window w = Ui.window(this);
         JSpinner delay = ispin(5, 1, 60, 1);
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         row.add(new JLabel("Delay (seconds):"));
@@ -1567,7 +1619,7 @@ final class CapturePanel extends JPanel {
                 "Capture screen region", JOptionPane.OK_CANCEL_OPTION);
         if (r != JOptionPane.OK_OPTION) return;
         ScreenGrab.grab(ival(delay), (img, ratio) -> {
-            BufferedImage out = ImagePicker.show(SwingUtilities.getWindowAncestor(this), "Select the region to include", img, null, 0);
+            BufferedImage out = ImagePicker.show(Ui.window(this), "Select the region to include", img, null, 0);
             if (out != null) insertImage(out, ratio);
         }, msg -> status.setText(msg));
     }
@@ -1909,7 +1961,7 @@ final class CapturePanel extends JPanel {
     }
 
     BufferedImage renderNow() {
-        Renderer.Result res = Renderer.renderFull(blocks(), st, scale, maxWidth);
+        Renderer.Result res = Renderer.renderFull(blocks(), st, scale, maxWidth, frame);
         lastRes = res;
         last = res.image;
         preview.setResult(res);
@@ -1985,8 +2037,8 @@ final class CapturePanel extends JPanel {
     private void share() {
         BufferedImage img = renderNow();
         String title = titleSupplier.get();
-        Persist.Snap snap = new Persist.Snap(captureId == null ? java.util.UUID.randomUUID().toString() : captureId, title, scale, maxWidth, blocks());
-        ShareDialog.open(SwingUtilities.getWindowAncestor(this), img, snap, ShareDialog.suggestedName(title));
+        Persist.Snap snap = new Persist.Snap(captureId == null ? java.util.UUID.randomUUID().toString() : captureId, title, scale, maxWidth, frame, blocks());
+        ShareDialog.open(Ui.window(this), img, snap, ShareDialog.suggestedName(title));
     }
 
     /** The Save PNG checkbox remembers the last choice for this session (default: encrypt, whenever encryption is on). */
@@ -2017,7 +2069,7 @@ final class CapturePanel extends JPanel {
         acc.add(enc, BorderLayout.NORTH);
         acc.add(Txt.lines(true, noteLines), BorderLayout.CENTER);
         fc.setAccessory(acc);
-        Component parent = SwingUtilities.getWindowAncestor(this);
+        Component parent = Ui.window(this);
         if (fc.showSaveDialog(parent) != JFileChooser.APPROVE_OPTION) return;
         boolean encrypted = enc.isEnabled() && enc.isSelected();
         if (enc.isEnabled()) lastEncryptChoice = encrypted;

@@ -62,6 +62,8 @@ final class Renderer {
         int rowH, padX, padY;
         BufferedImage img;
         int imgW, imgH;
+        double S = 1;
+        Color canvas = Color.WHITE;
 
         double sw(Font f, String s) {
             return s.isEmpty() ? 0 : f.getStringBounds(s, frc).getWidth();
@@ -151,6 +153,11 @@ final class Renderer {
     }
 
     static Result renderFull(List<Block> blocks, Settings st, double S, int maxWidth) {
+        return renderFull(blocks, st, S, maxWidth, null);
+    }
+
+    /** @param frame border / curvature / shadow around the whole capture (null = none) */
+    static Result renderFull(List<Block> blocks, Settings st, double S, int maxWidth, Border frame) {
         BufferedImage scratch = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
         Graphics2D mg = scratch.createGraphics();
         hints(mg);
@@ -299,7 +306,45 @@ final class Renderer {
         List<Layer> layers = new ArrayList<>();
         for (Laid a : all) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW, new Rectangle(a.bodyX(), a.bodyY(), a.boxW, a.boxH)));
         for (Laid a : ovs) layers.add(new Layer(a.b, new Rectangle(a.x, a.y, a.w, a.h), a.boxW, new Rectangle(a.bodyX(), a.bodyY(), a.boxW, a.boxH)));
+        if (frame != null && !frame.isNone()) {
+            int pad = frame.shadow > 0 ? frame.blurPx(S) + frame.offsetPx(S) + 1 : 0;
+            out = frame(out, frame, S, pad);
+            if (pad > 0) { // everything moves with the image; the preview's editing handles use these
+                for (Geo ge : geo) {
+                    if (ge.rect != null) ge.rect.translate(pad, pad);
+                    if (ge.arrow != null) {
+                        ge.arrow[0] += pad;
+                        ge.arrow[1] += pad;
+                        ge.arrow[2] += pad;
+                        ge.arrow[3] += pad;
+                    }
+                }
+                for (Layer l : layers) {
+                    l.rect.translate(pad, pad);
+                    l.body.translate(pad, pad);
+                }
+            }
+        }
         return new Result(out, geo, layers, S);
+    }
+
+    /** Draws the capture-wide frame: the image is clipped to rounded corners, gets its drop shadow and a stroke along its edge. */
+    private static BufferedImage frame(BufferedImage img, Border f, double S, int pad) {
+        boolean alpha = pad > 0 || f.radius > 0;
+        int w = img.getWidth(), h = img.getHeight();
+        BufferedImage res = new BufferedImage(w + 2 * pad, h + 2 * pad, alpha ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = res.createGraphics();
+        hints(g);
+        Rectangle r = new Rectangle(pad, pad, w, h);
+        Border.drawShadow(g, f, r, S);
+        java.awt.Shape cs = Border.clipShape(f, r, S);
+        if (cs != null) g.clip(cs);
+        g.drawImage(img, pad, pad, null);
+        g.setClip(null);
+        int sw = (int) Math.ceil(f.width * S);
+        if (f.width > 0) Border.drawStroke(g, f, new Rectangle(pad + sw, pad + sw, Math.max(1, w - 2 * sw), Math.max(1, h - 2 * sw)), S);
+        g.dispose();
+        return res;
     }
 
     /** Anchor rectangle + padding + the user's manual edge adjustments (1x pixels, set by dragging in the preview). */
@@ -372,6 +417,8 @@ final class Renderer {
     private static Laid measure(Block b, Settings st, double S, Graphics2D mg, int limit) {
         Laid a = new Laid();
         a.b = b;
+        a.S = S;
+        a.canvas = st.background;
         a.frc = mg.getFontRenderContext();
         FontSpec ls = b.labelFont != null ? b.labelFont : st.labelFont;
         if (b.labelFont == null && st.labelRatio > 0 && b.kind != Block.Kind.IMAGE) {
@@ -720,6 +767,26 @@ final class Renderer {
             g.setColor(a.lcol);
             g.drawString(a.label, (float) a.labelX(), (float) (a.y + a.labelAsc));
         }
+        Border bd = a.b.border != null && !a.b.border.isNone() ? a.b.border : null;
+        if (bd == null) {
+            drawBody(g, a);
+            return;
+        }
+        Rectangle body = new Rectangle(a.bodyX(), a.bodyY(), a.boxW, a.boxH);
+        Border.drawShadow(g, bd, body, a.S);
+        java.awt.Shape oldClip = g.getClip();
+        java.awt.Shape cs = Border.clipShape(bd, body, a.S);
+        if (cs != null) g.clip(cs);
+        if (bd.shadow > 0) { // an opaque base, so the shadow does not show through a transparent layer
+            g.setColor(a.b.background != null ? a.b.background : a.canvas);
+            g.fillRect(body.x, body.y, body.width, body.height);
+        }
+        drawBody(g, a);
+        g.setClip(oldClip);
+        Border.drawStroke(g, bd, body, a.S);
+    }
+
+    private static void drawBody(Graphics2D g, Laid a) {
         if (a.b.kind == Block.Kind.TERMINAL && !a.lines.isEmpty()) {
             drawTerminal(g, a);
             return;

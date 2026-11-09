@@ -160,7 +160,7 @@ final class TerminalBar extends JPanel {
 
     private void editPalette() {
         if (blk == null) return;
-        Window w = SwingUtilities.getWindowAncestor(this);
+        Window w = Ui.window(this);
         JDialog d = new JDialog(w, "Terminal colours", Dialog.ModalityType.APPLICATION_MODAL);
         Color[] cur = Term.palette(blk).clone();
         Color[] acc = Term.accents(blk).clone();

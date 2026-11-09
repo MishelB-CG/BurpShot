@@ -73,6 +73,10 @@ final class CaptureArchive {
 
     /** @param outputPng optional rendered screenshot to include as {@code output.png} (handy when the archive is shared); may be null */
     static byte[] pack(String id, String title, double scale, int maxWidth, List<Block> blocks, byte[] outputPng) throws IOException {
+        return pack(id, title, scale, maxWidth, null, blocks, outputPng);
+    }
+
+    static byte[] pack(String id, String title, double scale, int maxWidth, Border frame, List<Block> blocks, byte[] outputPng) throws IOException {
         final Map<String, byte[]> images = new LinkedHashMap<>();
         Store.Images io = new Store.Images() {
             public String put(BufferedImage img) throws IOException {
@@ -85,7 +89,7 @@ final class CaptureArchive {
                 return null;
             }
         };
-        String capture = Store.serializeRef(title, scale, maxWidth, blocks, io);
+        String capture = Store.serializeRef(title, scale, maxWidth, frame, blocks, io);
         Map<String, Object> mf = new LinkedHashMap<>();
         mf.put("format", FORMAT);
         mf.put("version", VERSION);

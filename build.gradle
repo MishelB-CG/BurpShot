@@ -7,8 +7,8 @@ repositories {
 }
 
 dependencies {
-    // Provided by Burp at runtime. Pin to a specific release if you prefer reproducible builds.
-    compileOnly 'net.portswigger.burp.extensions:montoya-api:+'
+    // Provided by Burp at runtime (pinned for reproducible builds).
+    compileOnly 'net.portswigger.burp.extensions:montoya-api:2026.7'
 
     // SFTP/SCP for "Share -> Save to remote" (BSD licence). The same jar is vendored in libs/ with its
     // SHA-256 for offline use; it is bundled into the extension jar by the jar task below.

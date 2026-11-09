@@ -20,6 +20,7 @@ final class Store {
         String title;
         double scale;
         int maxWidth = -1;
+        Border frame;   // border around the whole capture (null = none)
         final List<Block> blocks = new ArrayList<>();
     }
 
@@ -27,7 +28,11 @@ final class Store {
 
     /** Cheap fingerprint of a capture's editable state (images by identity), used by undo/redo to skip no-op changes. */
     static String signature(double scale, int maxWidth, List<Block> blocks) {
-        return build("", scale, maxWidth, blocks, 0, null);
+        return build("", scale, maxWidth, null, blocks, 0, null);
+    }
+
+    static String signature(double scale, int maxWidth, Border frame, List<Block> blocks) {
+        return build("", scale, maxWidth, frame, blocks, 0, null);
     }
 
     /** Where image pixels go when they are kept next to the JSON instead of inside it (capture archives). */
@@ -41,24 +46,52 @@ final class Store {
 
     /** Legacy format: images inline as base64 (still read for old project data and used by the self-tests). */
     static String serialize(String title, double scale, int maxWidth, List<Block> blocks) {
-        return build(title, scale, maxWidth, blocks, 1, null);
+        return build(title, scale, maxWidth, null, blocks, 1, null);
     }
 
     /** Current format: images are handed to {@code io} and only referenced from the JSON. */
     static String serializeRef(String title, double scale, int maxWidth, List<Block> blocks, Images io) {
-        return build(title, scale, maxWidth, blocks, 2, io);
+        return build(title, scale, maxWidth, null, blocks, 2, io);
+    }
+
+    static String serializeRef(String title, double scale, int maxWidth, Border frame, List<Block> blocks, Images io) {
+        return build(title, scale, maxWidth, frame, blocks, 2, io);
     }
 
     /** mode 0 = fingerprint only (undo), 1 = images inline (legacy), 2 = images by reference. */
-    private static String build(String title, double scale, int maxWidth, List<Block> blocks, int mode, Images io) {
+    private static String build(String title, double scale, int maxWidth, Border frame, List<Block> blocks, int mode, Images io) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("title", title);
         m.put("scale", scale);
         m.put("maxWidth", maxWidth);
+        if (frame != null && !frame.isNone()) m.put("frame", borderMap(frame));
         List<Object> bl = new ArrayList<>();
         for (Block b : blocks) bl.add(block(b, mode, io));
         m.put("blocks", bl);
         return Mini.write(m);
+    }
+
+    private static Map<String, Object> borderMap(Border b) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("color", b.color.getRGB() & 0xffffff);
+        m.put("width", b.width);
+        m.put("radius", b.radius);
+        m.put("shadow", b.shadow);
+        return m;
+    }
+
+    /** Reads a border; out-of-range numbers are clamped, anything that is not a map means "no border". */
+    @SuppressWarnings("unchecked")
+    private static Border borderOf(Object o) {
+        if (!(o instanceof Map)) return null;
+        Map<String, Object> m = (Map<String, Object>) o;
+        Border b = new Border();
+        Color c = col(m, "color");
+        if (c != null) b.color = c;
+        b.width = (int) fin(num(m, "width", 2), 0, Border.MAX_WIDTH, 2);
+        b.radius = (int) fin(num(m, "radius", 0), 0, Border.MAX_RADIUS, 0);
+        b.shadow = (int) fin(num(m, "shadow", 0), 0, Border.MAX_SHADOW, 0);
+        return b.isNone() ? null : b;
     }
 
     private static Object rgb(Color c) {
@@ -131,6 +164,7 @@ final class Store {
         m.put("separatorAfter", b.separatorAfter);
         m.put("sepColor", rgb(b.sepColor));
         m.put("sepWidth", b.sepWidth);
+        if (b.border != null && !b.border.isNone()) m.put("border", borderMap(b.border));
         List<Object> an = new ArrayList<>();
         for (Annotation a : b.annotations) {
             Map<String, Object> x = new LinkedHashMap<>();
@@ -187,6 +221,7 @@ final class Store {
         r.title = cut(str(m, "title", "capture"), 200);
         r.scale = fin(num(m, "scale", 2.0), 0.5, 8, 2.0);
         r.maxWidth = (int) fin(num(m, "maxWidth", -1), -1, 20000, -1);
+        r.frame = borderOf(m.get("frame"));
         Object bo = m.get("blocks");
         List<Object> bl = bo instanceof List ? (List<Object>) bo : new ArrayList<>();
         if (bl.size() > MAX_BLOCKS) throw new IllegalArgumentException("too many blocks");
@@ -341,6 +376,7 @@ final class Store {
         b.separatorAfter = bool(m, "separatorAfter", false);
         b.sepColor = col(m, "sepColor");
         b.sepWidth = (int) num(m, "sepWidth", 0);
+        b.border = borderOf(m.get("border"));
         for (Object o : annotationList(m)) {
             Map<String, Object> x = (Map<String, Object>) o;
             Annotation a = Annotation.create(Annotation.Type.valueOf(str(x, "type", "BOX")), str(x, "anchor", ""), (int) num(x, "occurrence", 0));

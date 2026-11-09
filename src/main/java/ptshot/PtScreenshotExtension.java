@@ -122,7 +122,15 @@ public class PtScreenshotExtension implements BurpExtension {
             }
         }
 
+        try {
+            Ui.suite = api.userInterface().swingUtils().suiteFrame();
+        } catch (Throwable t) {
+            Ui.suite = null; // dialogs then fall back to the window that holds the BurpShot tab
+        }
+        RemoteHttp.burp = new BurpHttp(api); // Share's HTTP(S) uploads honour Burp's proxy / TLS settings
         api.extension().registerUnloadingHandler(() -> {
+            RemoteHttp.burp = null;
+            ShareDialog.cancelAll();
             if (panel != null) panel.shutdown(); // bounded: never holds Burp up when it closes
             else store.shutdown();
         });

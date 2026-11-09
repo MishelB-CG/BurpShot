@@ -1180,6 +1180,15 @@ final class Icons {
         };
     }
 
+    static Icon border() {
+        return make((g, fg) -> {
+            g.setColor(new Color(0, 0, 0, 70));
+            g.fillRoundRect(4, 5, 12, 11, 5, 5);
+            g.setColor(fg);
+            g.drawRoundRect(2, 3, 12, 10, 5, 5);
+        });
+    }
+
     static Icon box() {
         return make((g, fg) -> {
             g.setColor(new Color(215, 30, 30));

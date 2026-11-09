@@ -8,6 +8,7 @@ reports - and lets you finish them without leaving Burp: crop, annotate, redact,
 * Everything is a **layer** (request, response, text, table, terminal, image, drawing). Layers can be moved, resized, aligned,
   cropped and annotated, and everything is saved in your Burp project.
 * Output: live preview, **Copy image**, **Save PNG**, or a separate **Preview window** you can capture with another tool.
+* Works in **Burp Suite Community Edition and Professional**: it uses only the Montoya API features that both editions provide (no Pro-only scanner / Collaborator features). In Community Edition, projects are temporary, so use the folder storage option of *Storage...* if you want captures to survive a restart.
 
 ---
 
@@ -51,6 +52,7 @@ java -cp "out;libs/jsch-2.28.8.jar" ptshot.RemoteSelfTest    # upload backends a
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.ShareSelfTest     # validation of the saved Share profiles / host keys
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.SavePngSelfTest   # Save PNG: plain / encrypted, locked and off states
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inline script pretty-printing
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.BorderSelfTest   # layer / capture borders: saving, drawing, clamping
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.StorageDialogSelfTest   # drives the real Storage dialog (needs a display)
@@ -327,12 +329,32 @@ Settings (enabled depending on the element type):
 | | Wrap long lines | On = wrap, off = cut with `...` |
 | | Max lines (0 = all) | Truncate tall blocks with `...` |
 | | Image max width (px) | Display width limit for image layers |
+| **Border** | Draw a border | Turns the layer's border on or off (details in [6.3](#63-borders-layer-and-whole-capture)) |
+| | Border color / width / curvature / Shadow | Colour, width (px), corner curvature (px) and drop-shadow strength (%) |
 | **Layout** | Place beside the previous block | Put this block in the same row as the one above |
 | | Separator line after this block | Grey rule between this block and the next |
 | | Custom separator colour / width | Override the global separator |
 | | **Reset layer position and size** | Undo drag-moves and resizes of this layer |
 
 ![Beside layout with separator](docs/images/28-beside-separator.png)
+
+### 6.3 Borders (layer and whole capture)
+
+Both a single layer and the whole screenshot can have a border:
+
+| Property | Range | Does |
+|---|---|---|
+| **Border color** | any colour (default black) | Colour of the line |
+| **Border width** | 0 - 40 px (default 2) | Thickness of the line; 0 = no line (a shadow can still be used) |
+| **Border curvature** | 0 - 120 px (default 0) | Rounds the corners; the content is clipped to the rounded shape |
+| **Shadow** | 0 - 100 % (default 0) | A soft drop shadow down and to the right; the higher, the bigger and darker |
+
+The **Drop shadow preset** button sets a thin border with a soft shadow in one click.
+
+* **One layer**: *Style & layout* tab -> **Border** section -> tick **Draw a border**. The border is drawn just *outside* the layer, so it never covers its text and never changes the layout.
+* **From the tool palette**: the **Border** button (left of the preview) opens the same dialog for the selected layer or for the whole capture. The line is drawn along the edge of the image. With curvature the corners become **transparent** and with a shadow the image grows by the shadow's size, so the saved PNG has an alpha channel (Save PNG, Share and Copy image all use it; pasting into an app that ignores transparency shows the corners white or black).
+* Changes are applied live; **Cancel** in the capture dialog puts the previous look back. Borders are saved with the capture (also in `.burpshot` archives and encrypted storage) and take part in Undo / Redo.
+* Fine print: curved corners clip the layer's content, so text that touches the box edge can be cut at a corner - give the layer some padding or use a smaller curvature.
 
 ---
 
@@ -347,7 +369,7 @@ The vertical bar to the left of the preview. Hover any button for a tooltip.
 | Group | Buttons (top to bottom) |
 |---|---|
 | **Tools** (one active at a time) | Select, Rectangle selection, Pencil, Brush, Bucket fill, Eraser |
-| **Elements** | Box, Arrow, Pixelate, Blur |
+| **Elements** | Box, Arrow, Pixelate, **Border**, Blur - Border (colour, width, curvature, shadow for the selected layer or the whole capture - see [6.3](#63-borders-layer-and-whole-capture)) |
 | **Add layer** | Text, Terminal, Table, Image, Pick from Burp |
 | **Layer** | Crop |
 
@@ -707,6 +729,8 @@ Saved captures and settings are treated as untrusted input, because a project fi
 | **SFTP / SCP** (SSH) | **password**, **private key** (pasted or a file, optional passphrase) | See host keys below. |
 | **Network share** (SMB / NFS / UNC) | handled by your operating system | A folder path such as `\\server\share\evidence` (Windows uses your session's credentials), or a mounted path (`/mnt/share`, `/Volumes/share`, `Z:\`). BurpShot does not log in to SMB / NFS itself: connect the share first (mapped drive, mount, or just be signed in). |
 | **Local folder** | - | A folder on this machine. |
+
+**Network settings.** For the HTTP(S)-based destinations (REST / WebDAV, S3, Google Cloud Storage, Dropbox, Google Drive, OneDrive, Azure) the box **Send through Burp's network settings** is ticked by default: the upload then goes through Burp's own HTTP engine, so Burp's upstream proxy, TLS and connection settings apply (needed on networks that only allow Internet access through a proxy). Because Burp lists requests sent by extensions in its **Logger**, such a request - including its credentials - is visible there and can be saved in the Burp project; untick the box to send it directly from BurpShot instead (your proxy settings are then not used). Redirects are never followed and certificates are verified in both modes unless you tick *Skip TLS certificate verification*. FTP/FTPS, SFTP/SCP and network-share / local-folder destinations are not HTTP and always connect directly. Uploads run in background threads that are stopped when the extension is unloaded.
 
 ### 13.2 Fixed endpoints, extra parameters and the request view
 

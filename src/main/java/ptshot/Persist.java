@@ -66,8 +66,14 @@ final class Persist {
         final double scale;
         final int maxWidth;
         final List<Block> blocks;
+        final Border frame;   // border around the whole capture (null = none)
 
         Snap(String id, String title, double scale, int maxWidth, List<Block> blocks) {
+            this(id, title, scale, maxWidth, null, blocks);
+        }
+
+        Snap(String id, String title, double scale, int maxWidth, Border frame, List<Block> blocks) {
+            this.frame = frame == null ? null : frame.copy();
             this.id = id;
             this.title = title;
             this.scale = scale;
@@ -294,7 +300,7 @@ final class Persist {
         if (cannotSave()) return false;
         io.execute(() -> {
             try {
-                backend.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.blocks, null)));
+                backend.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.frame, s.blocks, null)));
             } catch (Throwable t) {
                 report("Saving a capture failed: " + safe(t));
             }
@@ -361,7 +367,7 @@ final class Persist {
     private void rewriteAll(List<Snap> all) throws IOException {
         List<String> ids = new ArrayList<>();
         for (Snap s : all) {
-            backend.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.blocks, null)));
+            backend.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.frame, s.blocks, null)));
             ids.add(s.id);
         }
         for (String id : lockedIds()) if (!ids.contains(id)) ids.add(id);
@@ -559,7 +565,7 @@ final class Persist {
                 CaptureBackend old = backend;
                 List<String> ids = new ArrayList<>();
                 for (Snap s : all) {
-                    nb.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.blocks, null)));
+                    nb.write(s.id, seal(CaptureArchive.pack(s.id, s.title, s.scale, s.maxWidth, s.frame, s.blocks, null)));
                     ids.add(s.id);
                 }
                 for (String id : lockedIds()) { // not decrypted: carried over as they are

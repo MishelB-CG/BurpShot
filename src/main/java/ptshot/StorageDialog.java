@@ -133,7 +133,7 @@ final class StorageDialog {
     // ------------------------------------------------------------------ the dialog
 
     static void open(MainPanel owner, Persist store) {
-        Window w = SwingUtilities.getWindowAncestor(owner);
+        Window w = Ui.window(owner);
         JDialog d = new JDialog(w, "Storage and encryption", Dialog.ModalityType.APPLICATION_MODAL);
 
         JRadioButton rbProject = new JRadioButton("The Burp project file");
@@ -355,7 +355,7 @@ final class StorageDialog {
     /** One window instead of a second file chooser: the decrypted image is shown, and saving it is an explicit, optional button. */
     private static void showDecryptedPng(Component parent, byte[] png, Path source) throws Exception {
         java.awt.image.BufferedImage img = Png.decode(png);
-        JDialog v = new JDialog(SwingUtilities.getWindowAncestor(parent), "Decrypted: " + source.getFileName(), Dialog.ModalityType.APPLICATION_MODAL);
+        JDialog v = new JDialog(Ui.window(parent), "Decrypted: " + source.getFileName(), Dialog.ModalityType.APPLICATION_MODAL);
         javax.swing.JScrollPane sp = new javax.swing.JScrollPane(new JLabel(new javax.swing.ImageIcon(img)));
         sp.setPreferredSize(new java.awt.Dimension(Math.min(img.getWidth() + 24, 1000), Math.min(img.getHeight() + 24, 650)));
         JButton save = new JButton("Save as PNG...");

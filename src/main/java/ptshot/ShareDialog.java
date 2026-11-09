@@ -57,6 +57,31 @@ final class ShareDialog {
         SESSION_SECRETS.clear();
     }
 
+    private static final java.util.Set<Thread> WORKERS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** Runs an upload / test in a daemon thread that is tracked, so unloading the extension can stop it. */
+    static void spawn(Runnable r) {
+        Thread t = new Thread(null, null, "BurpShot-share", 0) {
+            @Override
+            public void run() {
+                try {
+                    r.run();
+                } finally {
+                    WORKERS.remove(this);
+                }
+            }
+        };
+        t.setDaemon(true);
+        WORKERS.add(t);
+        t.start();
+    }
+
+    /** Interrupts running uploads (called when the extension unloads). */
+    static void cancelAll() {
+        for (Thread t : WORKERS) t.interrupt();
+        WORKERS.clear();
+    }
+
     // ------------------------------------------------------------------ saved profiles (no secrets) and trusted host keys
 
     static final class Profile {
@@ -435,7 +460,7 @@ final class ShareDialog {
             if (!confirmRisk(d, t, cfg)) return;
             log.setText("");
             busyOn.run();
-            new Thread(() -> {
+            spawn(() -> {
                 try {
                     RemoteClient.Result r = RemoteClient.test(t.id, cfg, ui);
                     SwingUtilities.invokeLater(() -> log.append("OK: " + r.location + " - " + r.detail + "\n"));
@@ -446,7 +471,7 @@ final class ShareDialog {
                 } finally {
                     SwingUtilities.invokeLater(busyOff);
                 }
-            }, "BurpShot-share-test").start();
+            });
         });
 
         java.util.function.Supplier<Map<String, String>> formState = () -> {
@@ -496,7 +521,7 @@ final class ShareDialog {
                 for (RemoteSpec.Field f : t.fields) if (f.secret && cfg.get(f.key) != null && !cfg.get(f.key).isEmpty()) sec.put(f.key, cfg.get(f.key));
                 if (!sec.isEmpty()) SESSION_SECRETS.put(String.valueOf(profileBox.getSelectedItem()), sec);
             }
-            new Thread(() -> {
+            spawn(() -> {
                 try {
                     Prepared pr = prepareCached(cache, image, snap, wantArchive, wantEnc);
                     RemoteClient.Result r = sendEdit != null ? RemoteClient.sendRequestText(t.id, cfg, sendEdit, pr.data, ui)
@@ -514,7 +539,7 @@ final class ShareDialog {
                 } finally {
                     SwingUtilities.invokeLater(busyOff);
                 }
-            }, "BurpShot-share-upload").start();
+            });
         });
         viewReq.addActionListener(e -> {
             RemoteSpec.Type t = types.get(typeBox.getSelectedIndex());
@@ -529,7 +554,7 @@ final class ShareDialog {
             final Map<String, String> state = formState.get();
             log.setText("Preparing the request ...\n");
             busyOn.run();
-            new Thread(() -> {
+            spawn(() -> {
                 try {
                     Prepared pr = prepareCached(cache, image, snap, wantArchive, wantEnc);
                     RemoteClient.RequestPreview pv = RemoteClient.previewRequest(t.id, cfg, name, pr.data.length, pr.contentType);
@@ -552,7 +577,7 @@ final class ShareDialog {
                 } finally {
                     SwingUtilities.invokeLater(busyOff);
                 }
-            }, "BurpShot-share-preview").start();
+            });
         });
         copyLoc.addActionListener(e -> {
             if (lastLocation[0] != null) Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(lastLocation[0]), null);

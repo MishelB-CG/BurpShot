@@ -29,6 +29,13 @@ final class RemoteHttp {
     static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(120);
     private static final Pattern TOKEN = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
 
+    /** Optional transport (Burp's HTTP engine). Set by the extension when it loads; null in tests and standalone use. */
+    interface Transport {
+        Resp send(HttpRequest req, boolean insecureTls) throws IOException;
+    }
+
+    static volatile Transport burp;
+
     static final class Resp {
         final int status;
         final String body;      // at most the first 4 KiB, decoded as UTF-8
@@ -122,6 +129,16 @@ final class RemoteHttp {
 
     static Resp send(Cfg c, HttpRequest req) throws RemoteException {
         if (c.dry != null) { c.dry.req = req; throw new DryRun(); }
+        Transport bt = burp;
+        if (bt != null && c.bool("viaBurp")) {
+            try {
+                return bt.send(req, c.bool("insecureTls"));
+            } catch (IOException e) {
+                throw new RemoteException("Network error: " + RemoteUtil.stripCtl(c.redact(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())), null);
+            } catch (RuntimeException e) {
+                throw new RemoteException("Burp could not send the request (" + e.getClass().getSimpleName() + ").", null);
+            }
+        }
         HttpClient cl = client(c.bool("insecureTls"));
         try {
             HttpResponse<InputStream> r = cl.send(req, HttpResponse.BodyHandlers.ofInputStream());

@@ -85,7 +85,7 @@ final class MainPanel extends JPanel {
                 + "<b>Select text and right-click</b> for Box / Arrow / Pixelate / Blur on that text (they stay attached to it) and for edit actions like <i>Keep selection, ... the rest of the line</i>. <b>Ctrl+F</b> searches the editor (all layers: request and response).</li>"
                 + "<li><b>Tool palette</b> (left of the preview) - select / move, rectangle selection, pencil, brush, bucket, eraser; free Box / Arrow / Pixelate / Blur elements; new Text, <b>Terminal</b>, <b>Table</b> (Intruder, Proxy history, ...) and Image layers; <b>Pick from Burp</b> (turn any Burp button, text or table into a layer; Ctrl+click switches tabs while picking); <b>Crop</b>.</li>"
                 + "<li><b>Preview</b> - click an element or a layer to select it, drag to move, handles to resize, <b>Del</b> deletes it, <b>right-click</b> for a menu (delete, duplicate, order, crop, align, add elements at the click).</li>"
-                + "<li><b>Annotations</b> and <b>Style &amp; layout</b> tabs - element colours, arrows, pixelate strength; fonts, labels, wrapping, side-by-side blocks, separators, alignment.</li>"
+                + "<li><b>Annotations</b> and <b>Style &amp; layout</b> tabs - element colours, arrows, pixelate strength; fonts, labels, wrapping, side-by-side blocks, separators, alignment, borders (colour, width, curvature, shadow) per layer; the <b>Border</b> tool in the palette for a layer or the whole screenshot.</li>"
                 + "<li><b>Terminal layer</b> - paste output from a cmd / PowerShell / bash window; ANSI colours are kept, with dark / light themes, window frames, a highlighted command and colours by indentation.</li>"
                 + "<li><b>Export</b> - <b>Copy image</b> / <b>Save PNG</b>, or <b>Preview window</b> to capture it with another tool. Undo / redo with Ctrl+Z / Ctrl+Y.</li>"
                 + "<li><b>Share...</b> uploads a screenshot or the whole capture to SFTP / FTP / S3 / Google Cloud / Dropbox / Drive / an HTTP API / a network share, optionally encrypted.</li>"
@@ -172,7 +172,7 @@ final class MainPanel extends JPanel {
     private final Persist.Sink sink = new Persist.Sink() {
         public void loaded(String id, Store.Restored r) {
             if (closing || r.blocks.isEmpty()) return;
-            addTab(r.title, r.scale, r.maxWidth < 0 ? st.maxWidth : r.maxWidth, r.blocks, false, id, false);
+            addTab(r.title, r.scale, r.maxWidth < 0 ? st.maxWidth : r.maxWidth, r.blocks, false, id, false).setFrame(r.frame);
         }
 
         public void state(int locked, String message) {
@@ -230,7 +230,7 @@ final class MainPanel extends JPanel {
             if (!(c instanceof CapturePanel)) continue;
             CapturePanel cp = (CapturePanel) c;
             order.add(cp.captureId);
-            if (dirty.contains(cp)) store.save(new Persist.Snap(cp.captureId, tabs.getTitleAt(i), cp.scale(), cp.maxWidth(), cp.blocks()));
+            if (dirty.contains(cp)) store.save(new Persist.Snap(cp.captureId, tabs.getTitleAt(i), cp.scale(), cp.maxWidth(), cp.frame(), cp.blocks()));
         }
         dirty.clear();
         if (indexDirty) {
@@ -246,7 +246,7 @@ final class MainPanel extends JPanel {
             Component c = tabs.getComponentAt(i);
             if (c instanceof CapturePanel) {
                 CapturePanel cp = (CapturePanel) c;
-                l.add(new Persist.Snap(cp.captureId, tabs.getTitleAt(i), cp.scale(), cp.maxWidth(), cp.blocks()));
+                l.add(new Persist.Snap(cp.captureId, tabs.getTitleAt(i), cp.scale(), cp.maxWidth(), cp.frame(), cp.blocks()));
             }
         }
         return l;
@@ -268,7 +268,7 @@ final class MainPanel extends JPanel {
 
     /** Opens an imported capture archive as a new tab. */
     void openImported(Store.Restored r) {
-        addTab(r.title, r.scale, r.maxWidth < 0 ? st.maxWidth : r.maxWidth, r.blocks, true, null, true);
+        addTab(r.title, r.scale, r.maxWidth < 0 ? st.maxWidth : r.maxWidth, r.blocks, true, null, true).setFrame(r.frame);
     }
 
     /**
@@ -311,7 +311,7 @@ final class MainPanel extends JPanel {
     }
 
     /** @param id the saved id (null = a new capture); @param fresh true for new captures, which still have to be saved */
-    private void addTab(String title, double scale, int maxWidth, List<Block> blocks, boolean select, String id, boolean fresh) {
+    private CapturePanel addTab(String title, double scale, int maxWidth, List<Block> blocks, boolean select, String id, boolean fresh) {
         final CapturePanel[] holder = new CapturePanel[1];
         holder[0] = new CapturePanel(st, blocks, scale, maxWidth, () -> closeTab(holder[0]), this::openSettings, () -> markDirty(holder[0]));
         holder[0].captureId = id != null ? id : java.util.UUID.randomUUID().toString();
@@ -328,12 +328,13 @@ final class MainPanel extends JPanel {
             indexDirty = true;
             saveSoon();
         }
+        return holder[0];
     }
 
     void openSettings() {
         if (settingsOpen) return;
         settingsOpen = true;
-        SettingsDialog.open(SwingUtilities.getWindowAncestor(this), st, () -> {
+        SettingsDialog.open(Ui.window(this), st, () -> {
             persist.accept(st);
             for (Component c : tabs.getComponents()) if (c instanceof CapturePanel) ((CapturePanel) c).globalsChanged();
         });

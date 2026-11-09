@@ -88,6 +88,10 @@ final class RemoteSpec {
     private static Field file(String key, String label, String help, String showIf) {
         return new Field(key, label, "", help, Kind.FILE, null, false, showIf);
     }
+    private static Field viaBurp() {
+        return check("viaBurp", "Send through Burp's network settings (recommended)", true,
+                "Uses Burp's upstream proxy and TLS settings. Burp lists requests sent by extensions in its Logger, so the request - including its credentials - is visible there and may be saved in the project.", "");
+    }
     private static Field insecure(String showIf) {
         return check("insecureTls", "Skip TLS certificate verification (INSECURE)", false,
                 "Accepts any certificate and any host name. Only for lab systems; exposes credentials to interception.",
@@ -128,6 +132,7 @@ final class RemoteSpec {
                 secretTxt("keyValue", "API key value", "", "auth=apikey-header|apikey-query"),
                 secretTxt("cookie", "Cookie", "e.g. session=abc123; other=1", "auth=cookie"),
                 multi("headers", "Extra headers", "One 'Name: value' per line, max 20. Treated as secret (may hold credentials).", true, ""),
+                viaBurp(),
                 insecure(""))));
 
         // 2. S3
@@ -146,6 +151,7 @@ final class RemoteSpec {
                 pwd("secretKey", "Secret access key", "", "auth=access key"),
                 pwd("sessionToken", "Session token", "Optional (temporary credentials)", "auth=access key"),
                 secretTxt("presignedUrl", "Pre-signed PUT URL", "", "auth=pre-signed URL"),
+                viaBurp(),
                 insecure(""))));
 
         // 3. GCS
@@ -161,6 +167,7 @@ final class RemoteSpec {
                 pwd("secretKey", "HMAC secret", "", "auth=hmac"),
                 secretTxt("signedUrl", "Signed URL (PUT)", "", "auth=signed-url"),
                 apiBase("https://storage.googleapis.com", "Only change for testing"),
+                viaBurp(),
                 insecure(""))));
 
         // 4. Dropbox
@@ -170,6 +177,7 @@ final class RemoteSpec {
                 txt("folder", "Folder path", "/BurpShot", "", ""),
                 choice("mode", "If the file exists", "add", "add = keep both (autorename)", "", "add", "overwrite"),
                 apiBase("https://content.dropboxapi.com", "Only change for testing"),
+                viaBurp(),
                 insecure(""))));
 
         // 5. Google Drive
@@ -178,6 +186,7 @@ final class RemoteSpec {
                 pwd("token", "Access token", "", ""),
                 txt("parent", "Parent folder ID", "", "Optional; blank = My Drive root", ""),
                 apiBase("https://www.googleapis.com", "Only change for testing"),
+                viaBurp(),
                 insecure(""))));
 
         // 6. OneDrive
@@ -186,6 +195,7 @@ final class RemoteSpec {
                 pwd("token", "Access token", "", ""),
                 txt("folder", "Folder path", "BurpShot", "Relative to the drive root", ""),
                 apiBase("https://graph.microsoft.com", "Only change for testing"),
+                viaBurp(),
                 insecure(""))));
 
         // 7. Azure
@@ -194,6 +204,7 @@ final class RemoteSpec {
                 txt("container", "Container URL", "", "https://account.blob.core.windows.net/container", ""),
                 secretTxt("sas", "SAS token", "With or without the leading '?'", ""),
                 txt("prefix", "Blob prefix", "", "", ""),
+                viaBurp(),
                 insecure(""))));
 
         // 8. FTP

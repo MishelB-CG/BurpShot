@@ -114,6 +114,7 @@ final class Block {
     Color sepColor;
     int sepWidth;         // 0 = global
     final List<Annotation> annotations = new ArrayList<>();
+    Border border;        // null = no border around this layer
 
     static Block http(Kind k, String raw, Settings st) {
         Block b = new Block();
@@ -240,6 +241,7 @@ final class Block {
         b.maxBodyChars = maxBodyChars; b.hiddenHeaders.addAll(hiddenHeaders); b.hiddenParams.addAll(hiddenParams);
         b.wrapCols = wrapCols; b.maxLines = maxLines; b.wrap = wrap;
         b.beside = beside; b.separatorAfter = separatorAfter; b.sepColor = sepColor; b.sepWidth = sepWidth;
+        b.border = border == null ? null : border.copy();
         for (Annotation a : annotations) {
             Annotation c = Annotation.create(a.type, a.anchor, a.occurrence);
             c.color = a.color; c.width = a.width; c.pad = a.pad; c.fullWidth = a.fullWidth; c.blockArrow = a.blockArrow;
