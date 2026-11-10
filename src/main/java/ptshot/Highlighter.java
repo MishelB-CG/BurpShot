@@ -12,6 +12,11 @@ final class Highlighter {
     private static final Pattern HNAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
 
     static Color[] colorize(String t, boolean request, Color base, Color[] syn) {
+        return colorize(t, request, base, syn, null);
+    }
+
+    /** @param contentType given for a slice of a long body: the body is then coloured by its type even if the slice starts mid-document */
+    static Color[] colorize(String t, boolean request, Color base, Color[] syn, String contentType) {
         int n = t.length();
         Color[] c = new Color[n];
         Arrays.fill(c, base);
@@ -46,7 +51,7 @@ final class Highlighter {
             if (e >= n) break;
             pos = e + 1;
         }
-        if (bodyStart >= 0 && bodyStart < n) body(t, bodyStart, c, syn);
+        if (bodyStart >= 0 && bodyStart < n) body(t, bodyStart, c, syn, contentType);
         return c;
     }
 
@@ -54,11 +59,22 @@ final class Highlighter {
         for (int i = Math.max(0, s); i < Math.min(c.length, e); i++) c[i] = col;
     }
 
-    private static void body(String t, int s, Color[] c, Color[] syn) {
+    private static void body(String t, int s, Color[] c, Color[] syn, String contentType) {
         int i = s;
         while (i < t.length() && Character.isWhitespace(t.charAt(i))) i++;
         if (i >= t.length()) return;
         char f = t.charAt(i);
+        String ct = contentType == null ? "" : contentType.toLowerCase();
+        if (!ct.isEmpty() && f != '{' && f != '[' && f != '<') {
+            if (ct.contains("json")) {
+                json(t, s, c, syn);
+                return;
+            }
+            if (ct.contains("xml") || ct.contains("html")) {
+                markup(t, s, c, syn);
+                return;
+            }
+        }
         if (f == '-' && t.startsWith("--", i) && multipart(t, i, c, syn)) return;
         if (f == '{' || f == '[') json(t, s, c, syn);
         else if (f == '<') markup(t, s, c, syn);

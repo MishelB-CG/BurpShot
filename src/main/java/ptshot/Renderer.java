@@ -479,7 +479,10 @@ final class Renderer {
                 a.boxW = Math.max(a.boxW, (int) Math.ceil(need));
             }
             a.boxH = a.lines.isEmpty() ? 0 : a.textH + 2 * a.bpad + a.topExtra;
-            if (b.highlight && b.isHttp()) a.colors = Highlighter.colorize(b.text, b.kind == Block.Kind.REQUEST, a.base, st.syn);
+            if (b.highlight && b.isHttp()) {
+                String shown = b.shown();
+                a.colors = Highlighter.colorize(shown, b.kind == Block.Kind.REQUEST, a.base, st.syn, b.windowed() ? b.headerValue("content-type") : null);
+            }
         }
         a.w = Math.max(a.labelW, a.boxW);
         a.h = (a.label != null ? a.labelH + (a.boxH > 0 ? a.labelGap : 0) : 0) + a.boxH;
@@ -696,7 +699,7 @@ final class Renderer {
     }
 
     private static void layoutLines(Laid a, Block b, int limit) {
-        String text = b.text;
+        String text = b.shown();
         if (text == null || text.isEmpty()) return;
         double maxPx = b.wrapCols > 0 ? a.sw(a.bf, "0") * b.wrapCols : 0;
         if (limit > 0) {
@@ -844,7 +847,7 @@ final class Renderer {
     private static Rectangle anchorRect(Laid a, Annotation an, double S) {
         if (a.rows != null) return tableAnchor(a, an);
         if (a.lines.isEmpty() || an.anchor == null || an.anchor.isEmpty()) return null;
-        int s = nth(a.b.text, an.anchor, an.occurrence);
+        int s = nth(a.b.shown(), an.anchor, an.occurrence);
         if (s < 0) return null;
         int e = s + an.anchor.length();
         int bx = a.bodyX() + a.bpad, by = a.bodyY() + a.bpad + a.topExtra;

@@ -29,12 +29,32 @@ final class SearchBar extends JPanel {
     interface Hooks {
         /** Selects the next (dir &gt; 0) or previous layer with a match for p; false if there is none other than the current one. */
         boolean jumpLayer(int dir, Pattern p);
+
+        /** True if the current layer shows only a window of a long body (then the search can cover the whole body). */
+        default boolean windowed() {
+            return false;
+        }
+
+        /** The whole body of the current layer. */
+        default String body() {
+            return "";
+        }
+
+        /** Body offset of an editor position. */
+        default int bodyOffset(int editorPos) {
+            return editorPos;
+        }
+
+        /** Moves the window so that body range [s, e) is visible and selects it. */
+        default void showBodyMatch(int s, int e) {
+        }
     }
 
     private final JTextComponent ta;
     private final Hooks hooks;
     private final JTextField field = new JTextField(14);
-    private final JCheckBox matchCase = new JCheckBox("Aa"), regex = new JCheckBox(".*"), allLayers = new JCheckBox("All layers");
+    private final JCheckBox matchCase = new JCheckBox("Aa"), regex = new JCheckBox(".*"), allLayers = new JCheckBox("All layers"),
+            wholeBody = new JCheckBox("Whole body", true);
     private final JLabel count = new JLabel(" ");
     private final Highlighter.HighlightPainter all = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 235, 59, 150));
     private final Highlighter.HighlightPainter current = new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 152, 0, 190));
@@ -51,7 +71,9 @@ final class SearchBar extends JPanel {
         matchCase.setToolTipText("Match case");
         regex.setToolTipText("Regular expression");
         allLayers.setToolTipText("Continue into the other layers (request, response, ...) when this one has no more matches");
-        for (JCheckBox c : new JCheckBox[]{matchCase, regex, allLayers}) {
+        wholeBody.setToolTipText("The body is shown through a window: search the whole body (on) or only the part currently shown (off)");
+        wholeBody.setVisible(false);
+        for (JCheckBox c : new JCheckBox[]{matchCase, regex, allLayers, wholeBody}) {
             c.setFocusable(false);
             c.setMargin(new Insets(0, 2, 0, 2));
             c.addActionListener(e -> live());
@@ -65,6 +87,7 @@ final class SearchBar extends JPanel {
         add(matchCase);
         add(regex);
         add(allLayers);
+        add(wholeBody);
         setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 2));
         field.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) {
@@ -168,6 +191,7 @@ final class SearchBar extends JPanel {
     /** Rebuilds the highlights and the counter for the current text; does not move the selection. */
     void refresh() {
         clearHighlights();
+        wholeBody.setVisible(hooks.windowed());
         Pattern p = pattern();
         if (p == null) {
             count.setText(" ");
@@ -188,7 +212,40 @@ final class SearchBar extends JPanel {
             }
         } catch (BadLocationException ignored) {
         }
+        if (whole()) { // the counter covers the whole body, the highlights only what is shown
+            List<int[]> all = matches(p, hooks.body());
+            int cs = hooks.bodyOffset(ta.getSelectionStart()), ce = hooks.bodyOffset(ta.getSelectionEnd()), at = -1;
+            for (int i = 0; i < all.size(); i++) if (all.get(i)[0] == cs && all.get(i)[1] == ce) at = i;
+            count.setText(all.isEmpty() ? "no matches" : (at >= 0 ? (at + 1) + " / " : "") + all.size() + (all.size() >= 5000 ? "+" : "") + " in body");
+            return;
+        }
         count.setText(ms.isEmpty() ? "no matches" : (idx >= 0 ? (idx + 1) + " / " : "") + ms.size() + (ms.size() >= 5000 ? "+" : ""));
+    }
+
+    private boolean whole() {
+        return wholeBody.isSelected() && hooks.windowed();
+    }
+
+    /** Matches in the coordinates the search works in: the editor text, or the whole body when searching through a window. */
+    private List<int[]> found(Pattern p) {
+        return matches(p, whole() ? hooks.body() : ta.getText());
+    }
+
+    private int selStart() {
+        return whole() ? hooks.bodyOffset(ta.getSelectionStart()) : ta.getSelectionStart();
+    }
+
+    private int selEnd() {
+        return whole() ? hooks.bodyOffset(ta.getSelectionEnd()) : ta.getSelectionEnd();
+    }
+
+    private void go(int[] m) {
+        if (whole()) {
+            hooks.showBodyMatch(m[0], m[1]);
+            refresh();
+        } else {
+            select(m);
+        }
     }
 
     private void select(int[] m) {
@@ -202,22 +259,22 @@ final class SearchBar extends JPanel {
         Pattern p = pattern();
         refresh();
         if (p == null) return;
-        List<int[]> ms = matches(p, ta.getText());
+        List<int[]> ms = found(p);
         if (ms.isEmpty()) return;
-        int from = ta.getSelectionStart();
+        int from = selStart();
         for (int[] m : ms) {
             if (m[0] >= from) {
-                select(m);
+                go(m);
                 return;
             }
         }
-        select(ms.get(0));
+        go(ms.get(0));
     }
 
     private void step(int dir) {
         Pattern p = pattern();
         if (p == null) return;
-        List<int[]> ms = matches(p, ta.getText());
+        List<int[]> ms = found(p);
         boolean cross = allLayers.isSelected();
         if (ms.isEmpty()) {
             if (cross && hooks.jumpLayer(dir, p)) edge(dir);
@@ -225,10 +282,10 @@ final class SearchBar extends JPanel {
         }
         int[] pick = null;
         if (dir > 0) {
-            int from = ta.getSelectionEnd();
+            int from = selEnd();
             for (int[] m : ms) if (m[0] >= from) { pick = m; break; }
         } else {
-            int from = ta.getSelectionStart();
+            int from = selStart();
             for (int i = ms.size() - 1; i >= 0; i--) if (ms.get(i)[1] <= from) { pick = ms.get(i); break; }
         }
         if (pick == null) { // ran off the end of this layer
@@ -238,14 +295,14 @@ final class SearchBar extends JPanel {
             }
             pick = dir > 0 ? ms.get(0) : ms.get(ms.size() - 1);
         }
-        select(pick);
+        go(pick);
     }
 
     /** After a jump to another layer: the first match (going forward) or the last one (going back). */
     private void edge(int dir) {
         Pattern p = pattern();
         if (p == null) return;
-        List<int[]> ms = matches(p, ta.getText());
-        if (!ms.isEmpty()) select(dir > 0 ? ms.get(0) : ms.get(ms.size() - 1));
+        List<int[]> ms = found(p);
+        if (!ms.isEmpty()) go(dir > 0 ? ms.get(0) : ms.get(ms.size() - 1));
     }
 }

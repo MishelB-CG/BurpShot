@@ -104,6 +104,16 @@ final class CapturePanel extends JPanel {
     private JSpinner maxBody;
     private JTextArea ta;
     private JPanel filterPanel;
+    // long bodies: the editor shows a window (slice) of the body that is moved with a scroll bar, the mouse wheel or "Go to"
+    private JScrollPane taScroll;
+    private JPanel viewBar;
+    private JLabel viewInfo;
+    private javax.swing.JScrollBar viewScroll;
+    private JSpinner viewSizeSpin;
+    private javax.swing.JComboBox<String> viewUnitBox;
+    private JTextField viewGoto;
+    private JButton viewAllBtn;
+    private boolean viewAdjusting;
 
     // annotation tab
     private final DefaultListModel<Annotation> annModel = new DefaultListModel<>();
@@ -292,7 +302,7 @@ final class CapturePanel extends JPanel {
         filtersBtn = new javax.swing.JToggleButton("Filters ▸");
         filtersBtn.setFocusable(false);
         filtersBtn.setMargin(new java.awt.Insets(5, 12, 5, 12));
-        filtersBtn.setToolTipText("Choose which parts of the message are shown. Changing a filter or Pretty/Raw rebuilds the text (manual edits are lost).");
+        filtersBtn.setToolTipText("Choose which parts of the message are shown. Filters are applied on top of your manual edits (\"Reset text\" discards the edits).");
         barL.add(filtersBtn);
         filterSummary = new JLabel(" ");
         filterSummary.setFont(filterSummary.getFont().deriveFont(Font.ITALIC));
@@ -312,7 +322,7 @@ final class CapturePanel extends JPanel {
         inc.add(new JLabel("  Body limit"));
         maxBody.setToolTipText("Cut the body after this many characters (0 = all)");
         inc.add(maxBody);
-        inc.add(btn("Reset text", "Discard manual edits and rebuild the text from the captured message", e -> filtersChanged()));
+        inc.add(btn("Reset text", "Discard manual edits and rebuild the text from the captured message", e -> resetText()));
         JPanel lists = new JPanel(new GridLayout(1, 2, 4, 0));
         lists.add(hdrList);
         lists.add(parList);
@@ -346,7 +356,8 @@ final class CapturePanel extends JPanel {
                     cur.raw = Term.unshow(ta.getText());
                     cur.text = Term.strip(cur.raw);
                 } else {
-                    cur.text = ta.getText();
+                    if (cur.isHttp()) cur.applyEditorText(ta.getText());
+                    else cur.text = ta.getText();
                 }
                 annList.repaint();
                 refresh();
@@ -365,14 +376,39 @@ final class CapturePanel extends JPanel {
             }
         });
 
-        search = new SearchBar(ta, this::jumpLayer);
+        search = new SearchBar(ta, new SearchBar.Hooks() {
+            public boolean jumpLayer(int dir, java.util.regex.Pattern p) {
+                return CapturePanel.this.jumpLayer(dir, p);
+            }
+
+            public boolean windowed() {
+                return cur != null && cur.isHttp() && cur.windowed();
+            }
+
+            public String body() {
+                return cur == null ? "" : cur.bodyString();
+            }
+
+            public int bodyOffset(int editorPos) {
+                return cur == null ? editorPos : cur.bodyOffsetOfEditorPos(editorPos);
+            }
+
+            public void showBodyMatch(int s, int e) {
+                showMatchInBody(s, e);
+            }
+        });
         tableEd = new TableEditor(() -> {
             annList.repaint();
             refresh();
         });
         cards = new java.awt.CardLayout();
         centerCards = new JPanel(cards);
-        centerCards.add(new JScrollPane(ta), "text");
+        taScroll = new JScrollPane(ta);
+        taScroll.addMouseWheelListener(this::wheelOnEditor);
+        JPanel textCard = new JPanel(new BorderLayout());
+        textCard.add(taScroll, BorderLayout.CENTER);
+        textCard.add(buildViewBar(), BorderLayout.SOUTH);
+        centerCards.add(textCard, "text");
         centerCards.add(tableEd, "table");
         java.awt.event.MouseAdapter pop = new java.awt.event.MouseAdapter() {
             @Override
@@ -1315,7 +1351,8 @@ final class CapturePanel extends JPanel {
                 cards.show(centerCards, tbl ? "table" : "text");
                 search.setVisible(!img && !tbl);
                 if (tbl) tableEd.load(b);
-                ta.setText(img ? "(image block - no text)" : b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.text);
+                if (b.isHttp() && b.genText == null) b.genText = b.generate(); // base for merging later filter changes with manual edits
+                ta.setText(img ? "(image block - no text)" : b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.editorText());
                 ta.setCaretPosition(0);
                 incFirst.setSelected(b.incFirst);
                 incHeaders.setSelected(b.incHeaders);
@@ -1337,6 +1374,7 @@ final class CapturePanel extends JPanel {
         } finally {
             loading = false;
         }
+        updateViewBar();
         loadAnn();
         refresh();
     }
@@ -1400,9 +1438,21 @@ final class CapturePanel extends JPanel {
         refresh();
     }
 
+    /** Shows the current editor text of the layer (the slice, for a long body) and refreshes everything that depends on it. */
+    private void refreshEditor(int caret) {
+        loading = true;
+        ta.setText(cur.editorText());
+        ta.setCaretPosition(Math.max(0, Math.min(caret, ta.getDocument().getLength())));
+        loading = false;
+        annList.repaint();
+        updateSummary();
+        updateViewBar();
+        refresh();
+    }
+
     /**
      * Pretty / Raw: re-formats only the body of the text as it is now, so manual edits (deleted headers, removed lines,
-     * collapsed parts) survive the switch. Filters and "Reset text" still rebuild from the captured message.
+     * collapsed parts) survive the switch.
      */
     private void viewChanged() {
         if (loading || cur == null || !cur.isHttp()) return;
@@ -1410,34 +1460,235 @@ final class CapturePanel extends JPanel {
         if (toPretty == cur.pretty) return;
         cur.pretty = toPretty;
         String ct = cur.headerValue("content-type");
-        String[] hb = Block.splitBody(ta.getText());
+        String[] hb = Block.splitBody(cur.text);
         String body = hb[1];
+        int oldLen = Math.max(1, body.length());
         if (!body.trim().isEmpty()) body = toPretty ? Pretty.format(body, ct) : Pretty.compact(body, ct);
         String text = hb[0].isEmpty() ? body : body.isEmpty() ? hb[0] : hb[0] + "\n\n" + body;
-        cur.text = text;
-        loading = true;
-        ta.setText(text);
-        ta.setCaretPosition(0);
-        loading = false;
-        annList.repaint();
-        refresh();
+        cur.viewOffset = (int) ((long) cur.viewOffset * Math.max(1, body.length()) / oldLen); // keep the same relative position
+        cur.setFullText(text);
+        cur.genText = cur.generate();
+        refreshEditor(0);
     }
 
+    /** A filter changed: the new filtered text is merged with the user's manual edits (the edits win where both touch the same lines). */
     private void filtersChanged() {
         if (loading || cur == null || !cur.isHttp()) return;
-        cur.incFirst = incFirst.isSelected();
-        cur.incHeaders = incHeaders.isSelected();
-        cur.incBody = incBody.isSelected();
-        cur.pretty = viewPretty.isSelected();
-        cur.maxBodyChars = ival(maxBody);
-        cur.regenerate();
+        final Block b = cur;
+        String base = b.genText;
+        b.incFirst = incFirst.isSelected();
+        b.incHeaders = incHeaders.isSelected();
+        b.incBody = incBody.isSelected();
+        b.pretty = viewPretty.isSelected();
+        b.maxBodyChars = ival(maxBody);
+        String generated = b.generate();
+        int caret = ta.getCaretPosition();
+        String merged = generated;
+        String note = null;
+        if (base != null && !b.text.equals(generated)) {
+            Merge3.Result r = Merge3.merge(base, b.text, generated);
+            if (r == null) {
+                Object[] opts = {"Discard my edits and apply the filter", "Keep my edits"};
+                int ch = JOptionPane.showOptionDialog(Ui.window(this), "Your edits are too extensive to be combined with this filter change automatically.",
+                        "Filters", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, opts, opts[1]);
+                if (ch != 0) merged = b.text;
+                else caret = 0;
+            } else {
+                merged = r.text;
+                if (!merged.equals(generated)) note = r.conflicts > 0
+                        ? "Filter applied; your manual edits were kept (" + r.conflicts + " filter change" + (r.conflicts == 1 ? "" : "s") + " skipped where they touched the same lines)."
+                        : "Filter applied on top of your manual edits.";
+            }
+        }
+        b.setFullText(merged);
+        b.genText = generated;
+        refreshEditor(caret);
+        if (note != null) status.setText(note);
+    }
+
+    /** Discards manual edits and rebuilds the text from the captured message with the current filters. */
+    private void resetText() {
+        if (cur == null || !cur.isHttp()) return;
+        String generated = cur.generate();
+        if (!cur.text.equals(generated)
+                && JOptionPane.showConfirmDialog(Ui.window(this), "Discard your manual edits of this layer's text?", "Reset text", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+        cur.setFullText(generated);
+        cur.genText = generated;
+        refreshEditor(0);
+    }
+
+    // ------------------------------------------------------------------ window over a long body
+
+    private JPanel buildViewBar() {
+        viewBar = new JPanel(new BorderLayout(6, 2));
+        viewBar.setBorder(BorderFactory.createEmptyBorder(3, 4, 3, 4));
+        viewInfo = new JLabel(" ");
+        viewScroll = new javax.swing.JScrollBar(javax.swing.JScrollBar.HORIZONTAL, 0, 1, 0, 1);
+        viewScroll.addAdjustmentListener(e -> {
+            if (!viewAdjusting && !loading && cur != null && cur.windowed()) moveWindow(viewScroll.getValue(), 0);
+        });
+        viewSizeSpin = ispin(10000, 10, Block.MAX_WINDOW_CHARS, 1000);
+        viewSizeSpin.setToolTipText("How much is shown at a time. The window keeps this size while you scroll.");
+        viewSizeSpin.addChangeListener(e -> {
+            if (viewAdjusting || cur == null || !cur.isHttp()) return;
+            cur.viewSize = ival(viewSizeSpin);
+            cur.viewOn = cur.windowed() || cur.viewOn == 1 ? 1 : cur.viewOn;
+            cur.invalidateWindow();
+            refreshEditor(0);
+        });
+        viewUnitBox = new javax.swing.JComboBox<>(new String[]{"characters", "lines"});
+        viewUnitBox.addActionListener(e -> {
+            if (viewAdjusting || cur == null || !cur.isHttp()) return;
+            cur.viewUnit = viewUnitBox.getSelectedIndex();
+            cur.viewSize = cur.viewUnit == 0 ? 10000 : 100;
+            cur.viewOn = 1;
+            cur.invalidateWindow();
+            refreshEditor(0);
+        });
+        viewGoto = new JTextField(8);
+        viewGoto.setToolTipText("Jump to a character offset (or a line number when the unit is lines) and press Enter");
+        viewGoto.addActionListener(e -> {
+            if (cur == null || !cur.isHttp()) return;
+            try {
+                int v = Integer.parseInt(viewGoto.getText().trim().replace(",", "").replace(" ", ""));
+                int off = cur.viewUnit == 1 ? cur.lineStartOffset(Math.max(1, v)) : v;
+                if (off < 0) status.setText("The body has fewer than " + v + " lines.");
+                else moveWindow(off, 0);
+            } catch (NumberFormatException ex) {
+                status.setText("Enter a number.");
+            }
+        });
+        viewAllBtn = new JButton("Show all");
+        viewAllBtn.addActionListener(e -> showAllToggle());
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        row.add(new JLabel("Window"));
+        row.add(viewSizeSpin);
+        row.add(viewUnitBox);
+        row.add(new JLabel("Go to"));
+        row.add(viewGoto);
+        row.add(viewAllBtn);
+        viewBar.add(viewInfo, BorderLayout.NORTH);
+        viewBar.add(viewScroll, BorderLayout.CENTER);
+        viewBar.add(row, BorderLayout.SOUTH);
+        viewBar.setVisible(false);
+        return viewBar;
+    }
+
+    private void showAllToggle() {
+        if (cur == null || !cur.isHttp()) return;
+        if (cur.windowed()) {
+            int n = cur.bodyLength();
+            if (n > Block.SHOW_ALL_MAX) {
+                JOptionPane.showMessageDialog(Ui.window(this), String.format("This body has %,d characters, which is too much to show at once without freezing Burp.%nUse the scroll bar / Go to to move a window over it (up to %,d characters at a time).", n, Block.MAX_WINDOW_CHARS), "Show all", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            if (n > 1_000_000 && JOptionPane.showConfirmDialog(Ui.window(this), String.format("Showing all %,d characters can make Burp slow for a while. Continue?", n), "Show all", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+            cur.viewOn = 0;
+        } else {
+            cur.viewOn = 1;
+        }
+        cur.invalidateWindow();
+        refreshEditor(0);
+    }
+
+    /** Moves the window to a new body offset and keeps the editor scrolled to the top (anchor 0) or bottom (anchor 1) so scrolling feels continuous. */
+    private void moveWindow(int offset, int anchor) {
+        if (cur == null || !cur.isHttp()) return;
+        cur.viewOffset = Math.max(0, Math.min(offset, Math.max(0, cur.bodyLength() - 1)));
+        cur.invalidateWindow();
         loading = true;
-        ta.setText(cur.text);
-        ta.setCaretPosition(0);
+        ta.setText(cur.editorText());
+        ta.setCaretPosition(anchor == 1 ? ta.getDocument().getLength() : 0);
         loading = false;
-        annList.repaint();
-        updateSummary();
+        updateViewBar();
         refresh();
+        final javax.swing.JScrollBar v = taScroll.getVerticalScrollBar();
+        SwingUtilities.invokeLater(() -> v.setValue(anchor == 1 ? v.getMaximum() : 0));
+    }
+
+    /** Search through the whole body: moves the window (if needed) so that body range [s, e) is shown, then selects it. */
+    private void showMatchInBody(int s, int e) {
+        if (cur == null || !cur.isHttp() || !cur.windowed()) return;
+        int[] w = cur.windowRange();
+        if (s < w[0] || s >= w[1]) {
+            int off = cur.viewUnit == 1 ? cur.moveByLines(s, -2) : Math.max(0, s - cur.viewSize / 4);
+            moveWindow(off, 0);
+            w = cur.windowRange();
+            if (s < w[0] || s >= w[1]) { // the window start was snapped away from the match: start exactly at it
+                moveWindow(s, 0);
+                w = cur.windowRange();
+            }
+        }
+        int from = cur.editorPosOfBodyOffset(s), to = cur.editorPosOfBodyOffset(Math.min(e, w[1]));
+        int len = ta.getDocument().getLength();
+        from = Math.max(0, Math.min(from, len));
+        to = Math.max(from, Math.min(to, len));
+        ta.setCaretPosition(to);
+        ta.moveCaretPosition(from);
+        final int pos = from;
+        SwingUtilities.invokeLater(() -> { // after moveWindow's own scroll reset
+            try {
+                java.awt.Rectangle r = ta.modelToView2D(pos).getBounds();
+                ta.scrollRectToVisible(new java.awt.Rectangle(r.x, r.y - 40, Math.max(r.width, 10), r.height + 80));
+            } catch (javax.swing.text.BadLocationException ignored) {
+            }
+        });
+    }
+
+    /** Wheel: scrolls the text; at the top / bottom of the window it moves the window itself by the wheel delta. */
+    private void wheelOnEditor(java.awt.event.MouseWheelEvent e) {
+        if (cur == null || !cur.isHttp() || !cur.windowed()) return;
+        int rot = e.getWheelRotation();
+        if (rot == 0) return;
+        javax.swing.JScrollBar v = taScroll.getVerticalScrollBar();
+        int delta = rot * ta.getFontMetrics(ta.getFont()).getHeight() * 3;
+        boolean atBottom = v.getValue() + v.getVisibleAmount() >= v.getMaximum(), atTop = v.getValue() <= v.getMinimum();
+        if (rot > 0 && !atBottom) {
+            v.setValue(Math.min(v.getMaximum() - v.getVisibleAmount(), v.getValue() + delta));
+        } else if (rot < 0 && !atTop) {
+            v.setValue(Math.max(v.getMinimum(), v.getValue() + delta));
+        } else {
+            int[] w = cur.windowRange();
+            int off;
+            if (cur.viewUnit == 1) off = cur.moveByLines(w[0], 3 * rot);
+            else off = w[0] + rot * Math.max(1, cur.viewSize / 20);
+            moveWindow(off, rot > 0 ? 1 : 0);
+        }
+        e.consume();
+    }
+
+    /** Shows / hides the window controls and brings them in line with the current layer. */
+    private void updateViewBar() {
+        if (viewBar == null) return;
+        boolean show = cur != null && cur.isHttp() && cur.incBody && (cur.windowed() || cur.bodyLength() >= Block.BAR_AT);
+        viewBar.setVisible(show);
+        taScroll.setWheelScrollingEnabled(!(cur != null && cur.isHttp() && cur.windowed()));
+        if (!show) return;
+        viewAdjusting = true;
+        try {
+            int n = cur.bodyLength();
+            boolean win = cur.windowed();
+            if (win) {
+                int[] w = cur.windowRange();
+                viewInfo.setText(String.format("Showing characters %,d - %,d of %,d (scroll with the wheel, the bar or Go to)", w[0] + 1, w[1], n));
+                viewScroll.setValues(w[0], Math.max(1, w[1] - w[0]), 0, Math.max(1, n));
+                viewScroll.setUnitIncrement(Math.max(1, cur.viewSize / 20));
+                viewScroll.setBlockIncrement(Math.max(1, w[1] - w[0]));
+            } else {
+                viewInfo.setText(String.format("Showing the whole body (%,d characters); Window shows a slice at a time", n));
+                viewScroll.setValues(0, 1, 0, 1);
+            }
+            viewScroll.setEnabled(win);
+            viewUnitBox.setSelectedIndex(cur.viewUnit);
+            javax.swing.SpinnerNumberModel m = (javax.swing.SpinnerNumberModel) viewSizeSpin.getModel();
+            m.setMaximum(cur.viewUnit == 1 ? Block.MAX_WINDOW_LINES : Block.MAX_WINDOW_CHARS);
+            m.setMinimum(cur.viewUnit == 1 ? 1 : 10);
+            m.setStepSize(cur.viewUnit == 1 ? 10 : 1000);
+            m.setValue(Math.max(((Number) m.getMinimum()).intValue(), Math.min(cur.viewSize, ((Number) m.getMaximum()).intValue())));
+            viewAllBtn.setText(win ? "Show all" : "Window");
+        } finally {
+            viewAdjusting = false;
+        }
     }
 
     /** Called when the global settings dialog changed something. */

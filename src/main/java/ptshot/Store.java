@@ -109,7 +109,12 @@ final class Store {
         m.put("highlight", b.highlight);
         m.put("align", b.align);
         m.put("original", b.original);
-        m.put("text", b.text);
+        // a long message body that was never edited is rebuilt from "original" on load instead of being stored twice
+        if (mode == 0 || !b.isHttp() || b.text.length() < 200_000 || !b.text.equals(b.generate())) m.put("text", b.text);
+        m.put("viewOn", b.viewOn);
+        m.put("viewUnit", b.viewUnit);
+        m.put("viewSize", b.viewSize);
+        m.put("viewOffset", b.viewOffset);
         m.put("imageMaxWidth", b.imageMaxWidth);
         m.put("offX", b.offX);
         m.put("offY", b.offY);
@@ -204,7 +209,7 @@ final class Store {
         return deserialize(json, null);
     }
 
-    static final int MAX_BLOCKS = 500, MAX_ANNOTATIONS = 2000, MAX_ROWS = 5000, MAX_COLS = 200, MAX_TEXT = 8_000_000;
+    static final int MAX_BLOCKS = 500, MAX_ANNOTATIONS = 2000, MAX_ROWS = 5000, MAX_COLS = 200, MAX_TEXT = 32_000_000;
 
     /**
      * Reads a capture. The data is untrusted: it is parsed by a depth- and size-limited JSON parser (no Java deserialization, no
@@ -316,6 +321,7 @@ final class Store {
         b.highlight = bool(m, "highlight", true);
         b.align = (int) num(m, "align", 0);
         b.original = str(m, "original", "");
+        boolean hasText = m.containsKey("text");
         b.text = str(m, "text", "");
         b.imageMaxWidth = (int) num(m, "imageMaxWidth", 500);
         b.offX = num(m, "offX", 0);
@@ -404,7 +410,13 @@ final class Store {
             a.fh = num(x, "fh", 0);
             b.annotations.add(a);
         }
+        b.viewOn = (int) fin(num(m, "viewOn", -1), -1, 1, -1);
+        b.viewUnit = (int) fin(num(m, "viewUnit", 0), 0, 1, 0);
+        b.viewSize = (int) fin(num(m, "viewSize", 10000), 1, Block.MAX_WINDOW_CHARS, 10000);
+        b.viewOffset = (int) fin(num(m, "viewOffset", 0), 0, 100_000_000, 0);
         sanitize(b);
+        if (!hasText && b.isHttp()) b.regenerate();
+        b.genText = null; // recomputed when the layer is opened in the editor
         return b;
     }
 

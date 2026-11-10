@@ -104,6 +104,12 @@ final class Block {
     // filters (REQUEST / RESPONSE only)
     boolean incFirst = true, incHeaders = true, incBody = true, pretty;
     int maxBodyChars;
+    // window over a long body ("scroller"): viewOn -1 = automatic (only very long bodies), 0 = show everything, 1 = always windowed
+    int viewOn = -1, viewUnit, viewSize = 10000, viewOffset;   // unit 0 = characters, 1 = lines; offset = characters from the start of the body
+    private int winStart, winLen;      // the slice of the body the editor currently shows (body-relative)
+    private boolean winValid;
+    String genText;                    // what BurpShot generated for the current filters: the base of the merge when a filter changes
+    static final int AUTO_WINDOW_AT = 200_000, SHOW_ALL_MAX = 5_000_000, MAX_WINDOW_CHARS = 200_000, MAX_WINDOW_LINES = 5_000, BAR_AT = 20_000;
     final Set<Integer> hiddenHeaders = new HashSet<>();
     final Set<Integer> hiddenParams = new HashSet<>();
     // fitting
@@ -239,6 +245,7 @@ final class Block {
         for (List<String> r : rows) b.rows.add(new ArrayList<>(r));
         b.incFirst = incFirst; b.incHeaders = incHeaders; b.incBody = incBody; b.pretty = pretty;
         b.maxBodyChars = maxBodyChars; b.hiddenHeaders.addAll(hiddenHeaders); b.hiddenParams.addAll(hiddenParams);
+        b.viewOn = viewOn; b.viewUnit = viewUnit; b.viewSize = viewSize; b.viewOffset = viewOffset; b.genText = genText;
         b.wrapCols = wrapCols; b.maxLines = maxLines; b.wrap = wrap;
         b.beside = beside; b.separatorAfter = separatorAfter; b.sepColor = sepColor; b.sepWidth = sepWidth;
         b.border = border == null ? null : border.copy();
@@ -326,8 +333,17 @@ final class Block {
         return l;
     }
 
+    /** Rebuilds the text from the captured message with the current filters (discards manual edits). */
     void regenerate() {
         if (!isHttp()) return;
+        text = generate();
+        genText = text;
+        winValid = false;
+    }
+
+    /** The text the current filters produce from the captured message (does not touch {@link #text}). */
+    String generate() {
+        if (!isHttp()) return text;
         List<String> hl = headLines();
         StringBuilder sb = new StringBuilder();
         if (incFirst && !hl.isEmpty()) sb.append(hl.get(0)).append('\n');
@@ -344,14 +360,186 @@ final class Block {
             } else if (pretty) {
                 body = Pretty.format(body, headerValue("content-type"));
             }
-            body = Pretty.foldLongLines(body);
             if (maxBodyChars > 0 && body.length() > maxBodyChars) body = body.substring(0, maxBodyChars) + "\n...";
             if (sb.length() > 0) sb.append('\n');
             sb.append(body);
         }
         String out = sb.toString();
         while (out.endsWith("\n")) out = out.substring(0, out.length() - 1);
-        text = out;
+        return out;
+    }
+
+    // ---- window over a long body ----
+
+    private String splitFor;
+    private int splitHead, splitBodyAt;
+
+    /** Locates head / body in {@link #text} (cached for the current text). */
+    private void split() {
+        if (splitFor == text) return;
+        int i = text.indexOf("\n\n");
+        if (i >= 0) {
+            splitHead = i;
+            splitBodyAt = i + 2;
+        } else if (HEADISH.matcher(text).find()) {
+            splitHead = splitBodyAt = text.length();
+        } else {
+            splitHead = splitBodyAt = 0;
+        }
+        splitFor = text;
+    }
+
+    int bodyLength() {
+        split();
+        return text.length() - splitBodyAt;
+    }
+
+    /** True if only a slice of the body is shown (a long body, or the user asked for a window). */
+    boolean windowed() {
+        if (!isHttp() || viewOn == 0) return false;
+        int n = bodyLength();
+        return n > 0 && (viewOn == 1 || n > AUTO_WINDOW_AT);
+    }
+
+    void invalidateWindow() {
+        winValid = false;
+    }
+
+    /** Replaces the whole text (filters, Reset text, Pretty / Raw); the window is recomputed from its offset. */
+    void setFullText(String t) {
+        text = t;
+        winValid = false;
+        int n = bodyLength();
+        if (viewOffset > n) viewOffset = Math.max(0, n - 1);
+    }
+
+    private void ensureWindow() {
+        if (winValid) return;
+        split();
+        int n = text.length() - splitBodyAt, bs = splitBodyAt;
+        int off = Math.max(0, Math.min(viewOffset, n));
+        int s, e;
+        if (viewUnit == 0) {
+            s = off;
+            e = Math.min(n, s + Math.max(10, Math.min(viewSize, MAX_WINDOW_CHARS)));
+        } else {
+            int ls = off == 0 ? -1 : text.lastIndexOf('\n', bs + off - 1);
+            s = ls < bs ? 0 : ls + 1 - bs;
+            int lines = Math.max(1, Math.min(viewSize, MAX_WINDOW_LINES)), p = bs + s, cap = Math.min(text.length(), p + MAX_WINDOW_CHARS);
+            for (int c = 0; c < lines && p < cap; c++) {
+                int nl = text.indexOf('\n', p);
+                if (nl < 0 || nl + 1 > cap) {
+                    p = cap;
+                    break;
+                }
+                p = nl + 1;
+            }
+            e = p - bs;
+        }
+        winStart = s;
+        winLen = e - s;
+        winValid = true;
+    }
+
+    /** The whole message body (not just the window). */
+    String bodyString() {
+        split();
+        return text.substring(splitBodyAt);
+    }
+
+    /** Where an editor position (in {@link #editorText}) lies in the whole body. */
+    int bodyOffsetOfEditorPos(int pos) {
+        if (!windowed()) {
+            split();
+            return Math.max(0, pos - splitBodyAt);
+        }
+        ensureWindow();
+        int prefix = splitHead > 0 ? splitHead + 2 : 0;
+        return winStart + Math.max(0, Math.min(pos - prefix, winLen));
+    }
+
+    /** Where a body offset is in the editor text (only meaningful if it is inside the current window). */
+    int editorPosOfBodyOffset(int off) {
+        if (!windowed()) {
+            split();
+            return splitBodyAt + off;
+        }
+        ensureWindow();
+        return (splitHead > 0 ? splitHead + 2 : 0) + (off - winStart);
+    }
+
+    /** Body-relative offset where line number {@code line} (1-based) starts, or -1 if the body has fewer lines. */
+    int lineStartOffset(int line) {
+        split();
+        int p = splitBodyAt;
+        for (int i = 1; i < line; i++) {
+            int nl = text.indexOf('\n', p);
+            if (nl < 0) return -1;
+            p = nl + 1;
+        }
+        return p - splitBodyAt;
+    }
+
+    /** The offset {@code lines} lines after (or before, if negative) the line that contains {@code from}. */
+    int moveByLines(int from, int lines) {
+        split();
+        int bs = splitBodyAt, n = text.length() - bs;
+        int p = bs + Math.max(0, Math.min(from, n));
+        if (lines > 0) {
+            for (int i = 0; i < lines; i++) {
+                int nl = text.indexOf('\n', p);
+                if (nl < 0) break;
+                p = nl + 1;
+            }
+        } else {
+            p = Math.max(bs, text.lastIndexOf('\n', p - 1) + 1);
+            for (int i = 0; i < -lines && p > bs; i++) p = Math.max(bs, text.lastIndexOf('\n', p - 2) + 1);
+        }
+        return p - bs;
+    }
+
+    /** Start and end (body-relative) of the slice that is shown. */
+    int[] windowRange() {
+        ensureWindow();
+        return new int[]{winStart, winStart + winLen};
+    }
+
+    /** What the editor shows: the head plus the current slice of the body (no markers, so editing maps back exactly). */
+    String editorText() {
+        if (!windowed()) return text;
+        ensureWindow();
+        String slice = text.substring(splitBodyAt + winStart, splitBodyAt + winStart + winLen);
+        return splitHead > 0 ? text.substring(0, splitHead) + "\n\n" + slice : slice;
+    }
+
+    /** What is rendered into the screenshot: the head plus the slice of the body that is shown (nothing is added to the image). */
+    String shown() {
+        if (!windowed()) return text;
+        ensureWindow();
+        String slice = text.substring(splitBodyAt + winStart, splitBodyAt + winStart + winLen);
+        if (slice.endsWith("\n")) slice = slice.substring(0, slice.length() - 1);
+        return splitHead > 0 ? text.substring(0, splitHead) + "\n\n" + slice : slice;
+    }
+
+    /** Writes the (possibly edited) editor text back into the full text; an edit inside the window changes only that slice. */
+    void applyEditorText(String v) {
+        if (!windowed()) {
+            text = v;
+            winValid = false;
+            return;
+        }
+        ensureWindow();
+        boolean hasHead = splitHead > 0;
+        String head = "", slice = v;
+        if (hasHead) {
+            int i = v.indexOf("\n\n");
+            head = i < 0 ? v : v.substring(0, i);
+            slice = i < 0 ? "" : v.substring(i + 2);
+        }
+        String body = text.substring(splitBodyAt);
+        String nb = body.substring(0, winStart) + slice + body.substring(Math.min(body.length(), winStart + winLen));
+        text = hasHead ? head + "\n\n" + nb : nb;
+        winLen = slice.length();
     }
 
     @Override

@@ -53,6 +53,7 @@ java -cp "out;libs/jsch-2.28.8.jar" ptshot.ShareSelfTest     # validation of the
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.SavePngSelfTest   # Save PNG: plain / encrypted, locked and off states
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inline script pretty-printing
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.HighlightSelfTest   # syntax colours, incl. Cookie / Set-Cookie
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.WindowSelfTest   # filters merged with edits; windowed long bodies
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BorderSelfTest   # layer / capture borders: saving, drawing, clamping
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
@@ -158,10 +159,10 @@ Shows the content of the selected layer. What you see depends on the layer type.
 ![Content tab](docs/images/05-content-tab.png)
 
 **Pretty / Raw.** Switch between the two views of the body:
-* **Pretty** (default) re-indents JSON, XML, HTML (including inline `<script>` and `<style>` blocks), **JavaScript and CSS** (minified bundles become one statement per line, so you can pick a single line and keep only it). Strings, template literals, regular expressions and comments are never touched, and the code is never executed. Switching a JavaScript/CSS body back to *Raw* keeps the formatted text you see; use *Reset text* to get the original bytes. **Very long lines** (for example the `mappings` value of a `.js.map` source map, which can be megabytes on one line) are cut after 2,000 characters with a marker such as `...[7800000 more characters not shown]`, in both Pretty and Raw view; this keeps the editor responsive and the evidence readable. The format is taken from the `Content-Type` header, or guessed from the body.
+* **Pretty** (default) re-indents JSON, XML, HTML (including inline `<script>` and `<style>` blocks), **JavaScript and CSS** (minified bundles become one statement per line, so you can pick a single line and keep only it). Strings, template literals, regular expressions and comments are never touched, and the code is never executed. Switching a JavaScript/CSS body back to *Raw* keeps the formatted text you see; use *Reset text* to get the original bytes.
 * **Raw** shows the body exactly as captured.
 
-Switching **Pretty / Raw keeps your manual edits**: only the body of the text as it is now is re-formatted (Pretty re-indents it, Raw compacts it again), so deleted headers, removed lines and `...` parts stay as you left them. Changing a **filter** or pressing *Reset text*, on the other hand, rebuilds the text from the captured message - **manual edits to that layer are lost**.
+Switching **Pretty / Raw keeps your manual edits**: only the body of the text as it is now is re-formatted (Pretty re-indents it, Raw compacts it again), so deleted headers, removed lines and `...` parts stay as you left them. Changing a **filter** (including *Select all / Select none*) is applied **on top of your manual edits** with a line-based three-way merge: the filter's change (a header disappearing, the body being cut) and your edits are both kept, so *Select none* followed by *Select all* gives back exactly what you had. Only where a filter change touches a line you edited yourself, your edit wins (the status line says so). Only *Reset text* discards manual edits (after asking).
 
 **Filters.** Click **Filters >** to open them (they are collapsed by default; the line next to the button summarises what is hidden, e.g.
 `1 header hidden, body cut at 500`).
@@ -171,10 +172,27 @@ Switching **Pretty / Raw keeps your manual edits**: only the body of the text as
 | Filter | Does |
 |---|---|
 | **Include: First line / Headers / Body** | Show or hide each part. |
-| **Body limit** | Cut the body after this many characters (0 = all). |
+| **Body limit** | Cut the body after this many characters (0 = all). For long bodies prefer the [window](#long-bodies-the-window) below. |
 | **Headers** list | Untick a header to hide it. **Select all / Select none** act on the whole list. |
 | **Form parameters** list | Same for `a=1&b=2` bodies (hide single parameters). |
-| **Reset text** | Throw away manual edits and rebuild from the captured message. |
+| **Reset text** | Throw away manual edits and rebuild from the captured message (asks first if there are edits). |
+
+<a id="long-bodies-the-window"></a>
+**Long bodies: the window.** A response such as a bundle or a `.js.map` source map can be many megabytes, often on a single line, which would freeze the editor. From **200,000 characters** the Content tab therefore shows only a **window** of the body (the headers are always shown), and a bar appears under the editor (it is also available for bodies from 20,000 characters, to window them by hand):
+
+| Control | Does |
+|---|---|
+| **Window** *size* + *characters / lines* | How much is shown at a time (default 10,000 characters; or e.g. 100 lines). The window keeps this size while you scroll. |
+| **Scroll bar** | Moves the window over the whole body; the label shows e.g. `Showing characters 120,001 - 130,000 of 8,214,550`. |
+| **Mouse wheel** | Scrolls the text; when you reach the top or bottom of the window the window itself moves on by the wheel delta (3 lines per notch in *lines* mode), so scrolling feels continuous. |
+| **Go to** | Jumps to a character offset (or a line number in *lines* mode); press Enter. |
+| **Show all** / **Window** | Shows the whole body (asks above 1,000,000 characters; refused above 5,000,000, where the editor would freeze) and goes back to the window. |
+
+* The **screenshot shows the window** - exactly what is on screen; nothing is added to the image.
+* Your **edits inside the window are kept** when you scroll away; they change only that part of the body. The window size and position are saved with the capture.
+* Filters, Pretty / Raw and *Reset text* work on the **whole body** first and then the window is cut from the result. Text-based annotations only see the slice that is currently shown.
+* **Find** has a **Whole body** box (on by default, shown only while a window is active): on, it searches the entire body, counts matches over all of it (`2 / 14 in body`) and moves the window to each match; off, it searches only the slice that is currently shown.
+* A long body that you did not edit is not stored twice: it is rebuilt from the captured message when the capture is opened.
 
 ### 4.2 Editing the text
 
