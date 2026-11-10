@@ -52,6 +52,7 @@ java -cp "out;libs/jsch-2.28.8.jar" ptshot.RemoteSelfTest    # upload backends a
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.ShareSelfTest     # validation of the saved Share profiles / host keys
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.SavePngSelfTest   # Save PNG: plain / encrypted, locked and off states
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inline script pretty-printing
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.HighlightSelfTest   # syntax colours, incl. Cookie / Set-Cookie
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BorderSelfTest   # layer / capture borders: saving, drawing, clamping
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
@@ -323,7 +324,7 @@ Settings (enabled depending on the element type):
 | | Alignment (label / block) | **Left / Centre / Right**. For a block on its own row this is a position on the **whole canvas**: choosing it snaps the layer there (and clears any horizontal move you made by dragging). |
 | | Label font | Family, size, bold / italic, colour |
 | **Body** | Body font | Family, size, style, colour |
-| | Burp-style syntax colouring | Colours for headers, JSON keys / strings / numbers, parameters, tags |
+| | Burp-style syntax colouring | Colours for headers, JSON keys / strings / numbers, parameters (also the names and values in `Cookie` and `Set-Cookie` headers and the fields of `multipart/form-data` bodies), tags |
 | | Body background | Optional fill behind the text |
 | **Fit** | Wrap at columns (0 = off) | Maximum characters per line |
 | | Wrap long lines | On = wrap, off = cut with `...` |
