@@ -39,7 +39,7 @@ reports - and lets you finish them without leaving Burp: crop, annotate, redact,
 
 **Build from source** (JDK 17 or newer):
 * `./build.sh` (Git Bash on Windows, Linux, macOS) - verifies the bundled SSH library's checksum, compiles, and writes `burpshot.jar`. It expects the Montoya API jar at `../montoya-api.jar` (or set `MONTOYA=/path/to/montoya-api.jar`).
-* or `gradle jar` (output in `build/libs/`).
+* or the Gradle wrapper: `./gradlew build` (`gradlew.bat build` on Windows; any JDK 17 or newer, the bytecode targets Java 17). The extension jar is written to `build/libs/burpshot.jar`. The files under `src/test` are plain programs, run by hand as shown below, not part of the Gradle build.
 
 The extension jar bundles one third-party library, **JSch** (`com.github.mwiede:jsch` 2.28.8, BSD licence), for SFTP/SCP in [Share](#13-share-save-to-remote). It is kept in `libs/` with its SHA-256 and licence notice and is checked on every build. Everything else uses only the JDK.
 

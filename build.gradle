@@ -15,14 +15,15 @@ dependencies {
     implementation 'com.github.mwiede:jsch:2.28.8'
 }
 
+// Compile for Java 17 with whatever JDK (17 or newer) runs the build; no toolchain download is needed.
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.release = 17
 }
 
 jar {
@@ -35,4 +36,14 @@ jar {
     exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
     // JSch ships Java 11+ specific classes under META-INF/versions; keep them usable in the merged jar.
     manifest { attributes 'Multi-Release': 'true' }
+}
+
+// The self-tests under src/test are plain programs (some open Swing windows, one needs Apache MINA SSHD); they are compiled and run
+// by hand as described in the README, so Gradle's own test source set is left empty.
+sourceSets {
+    test {
+        java {
+            srcDirs = []
+        }
+    }
 }
