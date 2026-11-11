@@ -94,6 +94,14 @@ final class Store {
         return b.isNone() ? null : b;
     }
 
+    /**
+     * For the undo fingerprint (mode 0) a long text is replaced by its length and hash: the fingerprint is kept for every undo step, and
+     * a copy of a multi-megabyte body in each of them used up gigabytes of memory.
+     */
+    private static String fingerprint(String s, int mode) {
+        return mode == 0 && s.length() > 256 ? s.length() + "#" + s.hashCode() : s;
+    }
+
     private static Object rgb(Color c) {
         return c == null ? null : (Object) (c.getRGB() & 0xffffff);
     }
@@ -108,9 +116,9 @@ final class Store {
         m.put("background", rgb(b.background));
         m.put("highlight", b.highlight);
         m.put("align", b.align);
-        m.put("original", b.original);
+        m.put("original", fingerprint(b.original, mode));
         // a long message body that was never edited is rebuilt from "original" on load instead of being stored twice
-        if (mode == 0 || !b.isHttp() || b.text.length() < 200_000 || !b.text.equals(b.generate())) m.put("text", b.text);
+        if (mode == 0 || !b.isHttp() || b.text.length() < 200_000 || !b.text.equals(b.generate())) m.put("text", fingerprint(b.text, mode));
         m.put("viewOn", b.viewOn);
         m.put("viewUnit", b.viewUnit);
         m.put("viewSize", b.viewSize);
@@ -121,7 +129,7 @@ final class Store {
         m.put("boxW", b.boxW);
         m.put("imageW", b.imageW);
         m.put("overlay", b.overlay);
-        m.put("raw", b.raw);
+        m.put("raw", fingerprint(b.raw, mode));
         m.put("preset", b.preset);
         m.put("chrome", b.chrome);
         m.put("title", b.title);

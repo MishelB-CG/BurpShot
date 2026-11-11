@@ -1102,13 +1102,30 @@ final class CapturePanel extends JPanel {
 
     private Snap snap() {
         Snap s = new Snap();
-        for (Block b : blocks()) s.blocks.add(b.duplicate());
+        for (Block b : blocks()) {
+            Block d = b.duplicate();
+            d.genText = null; // a second full copy of the text per undo step; it is recomputed when the layer is opened
+            s.blocks.add(d);
+        }
         s.scale = scale;
         s.maxWidth = maxWidth;
         s.frame = frame == null ? null : frame.copy();
         s.sel = list.getSelectedIndex();
         s.sig = Store.signature(scale, maxWidth, frame, blocks());
         return s;
+    }
+
+    /** Size of the distinct texts held by the undo steps (steps that did not change a text share the same string). */
+    private long historyBytes() {
+        java.util.Map<String, Boolean> seen = new java.util.IdentityHashMap<>();
+        long total = 0;
+        for (Snap sn : undo) {
+            for (Block b : sn.blocks) {
+                if (seen.put(b.text, Boolean.TRUE) == null) total += b.text.length();
+                if (seen.put(b.raw, Boolean.TRUE) == null) total += b.raw.length();
+            }
+        }
+        return total;
     }
 
     /** Pushes the state before the latest batch of edits onto the undo stack (no-op if nothing changed). */
@@ -1120,7 +1137,8 @@ final class CapturePanel extends JPanel {
         }
         if (Store.signature(scale, maxWidth, frame, blocks()).equals(committed.sig)) return;
         undo.push(committed);
-        while (undo.size() > 100) undo.removeLast();
+        // at most 100 steps, and at most ~200 MB of text in them (every step of a multi-megabyte body is a full copy of it)
+        while (undo.size() > 100 || (undo.size() > 1 && historyBytes() > (200L << 20))) undo.removeLast();
         redo.clear();
         committed = snap();
         updateUndoButtons();
