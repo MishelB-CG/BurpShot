@@ -207,7 +207,7 @@ The box is a normal text editor: type, delete, paste. Select text and **right-cl
 | **Keep selection, ... the rest of the line** | Keep the header name and the selected part, replace the rest of the line with `...` (e.g. `Cookie: ...session=abc...`). |
 | **Delete line(s)** | Remove the selected line(s). |
 | **Collapse line(s) to ...** | Replace the selected line(s) with a single `...` line (e.g. skipped JSON elements). |
-| **Keep only selected line(s)** | Keep the selected line(s) and collapse everything else into `...`. |
+| **Keep only selected line(s)** | Keep the selected line(s) and collapse everything else into `...`. On a request or response this works on the **body only**: the first line and the headers always stay (select lines in the body; a selection in the headers does nothing and says so). |
 | **Render selection as HTML...** | See [9.4](#94-rendered-html). |
 
 ![Edit actions before and after](docs/images/08-edit-actions.png)

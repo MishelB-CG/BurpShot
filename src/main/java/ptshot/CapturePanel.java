@@ -1818,8 +1818,25 @@ final class CapturePanel extends JPanel {
     /** mode 0 = delete, 1 = collapse into "...", 2 = keep only (collapse everything else). */
     private void lineOp(int mode) {
         if (cur == null || cur.kind == Block.Kind.IMAGE || cur.kind == Block.Kind.TABLE) return;
-        String t = ta.getText();
+        String all = ta.getText();
         int s = ta.getSelectionStart(), e = ta.getSelectionEnd();
+        // "Keep only" on a request / response works on the body: the status line and the headers always stay
+        int bs = 0;
+        if (mode == 2 && cur.isHttp()) {
+            String[] hb = Block.splitBody(all);
+            if (!hb[0].isEmpty()) {
+                bs = hb[0].length() + 2;
+                if (bs > all.length()) bs = all.length();
+                if (e <= bs - 1 || bs >= all.length()) {
+                    status.setText("Keep only works on the body: the status line and headers are left alone. Select lines in the body (use Delete / Collapse, or the Filters, for headers).");
+                    return;
+                }
+                s = Math.max(s, bs);
+            }
+        }
+        String t = all.substring(bs);
+        s -= bs;
+        e -= bs;
         int eEff = (e > s && e <= t.length() && t.charAt(e - 1) == '\n') ? e - 1 : e;
         int ls = t.lastIndexOf('\n', s - 1) + 1;
         int le = t.indexOf('\n', eEff);
@@ -1829,8 +1846,9 @@ final class CapturePanel extends JPanel {
         if (mode == 0) out = pre + post;
         else if (mode == 1) out = pre + "..." + (post.isEmpty() ? "" : "\n" + post);
         else out = (pre.trim().isEmpty() ? "" : "...\n") + mid + (post.trim().isEmpty() ? "" : "\n...");
+        out = all.substring(0, bs) + out;
         ta.setText(out);
-        ta.setCaretPosition(Math.min(ls, out.length()));
+        ta.setCaretPosition(Math.min(bs + ls, out.length()));
     }
 
     // ================================================================== rendered HTML
