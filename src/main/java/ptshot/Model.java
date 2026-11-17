@@ -701,6 +701,52 @@ final class Settings {
         return m;
     }
 
+    private static int clampI(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
+    }
+
+    private static FontSpec clampFont(FontSpec f) {
+        String fam = f.family == null || f.family.trim().isEmpty() ? "Monospaced" : f.family.trim();
+        if (fam.length() > 100) fam = fam.substring(0, 100);
+        return new FontSpec(fam, clampI(f.size, 4, 200), f.bold, f.italic, f.color);
+    }
+
+    /** Keeps every value inside the range the settings dialog allows (settings can come from a file or from preferences). */
+    void sanitize() {
+        bodyFont = clampFont(bodyFont);
+        labelFont = clampFont(labelFont);
+        sepWidth = clampI(sepWidth, 1, 20);
+        margin = clampI(margin, 0, 100);
+        rowGap = clampI(rowGap, 0, 100);
+        colGap = clampI(colGap, 0, 200);
+        labelGap = clampI(labelGap, 0, 50);
+        wrapCols = clampI(wrapCols, 0, 500);
+        maxLines = clampI(maxLines, 0, 600);
+        maxWidth = clampI(maxWidth, 0, 5000);
+        if (!(labelRatio >= 0) || labelRatio > 4) labelRatio = 1.4;
+        if (!(scale >= 1) || scale > 4) scale = 2.0;
+    }
+
+    /** Takes over every value of {@code o}. */
+    void copyFrom(Settings o) {
+        bodyFont = o.bodyFont.copy();
+        labelFont = o.labelFont.copy();
+        background = o.background;
+        sepColor = o.sepColor;
+        sepWidth = o.sepWidth;
+        margin = o.margin;
+        rowGap = o.rowGap;
+        colGap = o.colGap;
+        labelGap = o.labelGap;
+        wrapCols = o.wrapCols;
+        maxLines = o.maxLines;
+        labelRatio = o.labelRatio;
+        maxWidth = o.maxWidth;
+        wrap = o.wrap;
+        scale = o.scale;
+        for (int i = 0; i < syn.length; i++) syn[i] = o.syn[i];
+    }
+
     void load(Function<String, String> get) {
         Function<String, String> g = k -> {
             try {
@@ -731,5 +777,6 @@ final class Settings {
         } catch (Exception ignored) {
         }
         for (int i = 0; i < syn.length; i++) syn[i] = col(g.apply("syn" + i), syn[i]);
+        sanitize();
     }
 }

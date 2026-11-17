@@ -4,9 +4,12 @@ import java.awt.BorderLayout;
 import java.awt.Dialog;
 import java.awt.FlowLayout;
 import java.awt.Window;
+import java.io.File;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JFileChooser;
+import javax.swing.JOptionPane;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -133,8 +136,47 @@ final class SettingsDialog {
         }
 
         JPanel south = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton exp = new JButton("Export settings...");
+        exp.setToolTipText("Save these global settings (fonts, colours, spacing, defaults, syntax colours) to a file");
+        exp.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setDialogTitle("Export BurpShot settings");
+            fc.setSelectedFile(new File("burpshot-settings.json"));
+            if (fc.showSaveDialog(d) != JFileChooser.APPROVE_OPTION) return;
+            File out = fc.getSelectedFile();
+            if (!out.getName().toLowerCase().endsWith(".json")) out = new File(out.getPath() + ".json");
+            if (out.exists() && JOptionPane.showConfirmDialog(d, out.getName() + " already exists. Replace it?", "Export settings", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
+            try {
+                SettingsFile.export(out, st);
+                JOptionPane.showMessageDialog(d, "Settings saved to " + out.getName());
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(d, "Could not save the settings: " + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()), "Export settings", JOptionPane.ERROR_MESSAGE);
+            }
+        });
+        JButton imp = new JButton("Import settings...");
+        imp.setToolTipText("Replace these global settings with the ones from a file exported by BurpShot");
+        imp.addActionListener(e -> {
+            JFileChooser fc = new JFileChooser();
+            fc.setDialogTitle("Import BurpShot settings");
+            if (fc.showOpenDialog(d) != JFileChooser.APPROVE_OPTION) return;
+            Settings loaded;
+            try {
+                loaded = SettingsFile.read(fc.getSelectedFile());
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(d, ex.getMessage() == null ? "The file could not be read." : ex.getMessage(), "Import settings", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            if (JOptionPane.showConfirmDialog(d, "Replace your current global settings with the ones in " + fc.getSelectedFile().getName() + "?\n(Existing captures keep their own per-layer values.)",
+                    "Import settings", JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return;
+            st.copyFrom(loaded);
+            changed.run();
+            d.dispose();
+            open(owner, st, changed); // rebuild the dialog with the imported values
+        });
         JButton close = new JButton("Close");
         close.addActionListener(e -> d.dispose());
+        south.add(exp);
+        south.add(imp);
         south.add(close);
         d.getContentPane().add(new JScrollPane(f.top()), BorderLayout.CENTER);
         d.getContentPane().add(south, BorderLayout.SOUTH);

@@ -54,6 +54,7 @@ java -cp "out;libs/jsch-2.28.8.jar" ptshot.SavePngSelfTest   # Save PNG: plain /
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inline script pretty-printing
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.HighlightSelfTest   # syntax colours, incl. Cookie / Set-Cookie
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.WindowSelfTest   # filters merged with edits; windowed long bodies
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.SettingsFileSelfTest   # export / import of the global settings
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BorderSelfTest   # layer / capture borders: saving, drawing, clamping
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
@@ -342,7 +343,7 @@ Settings (enabled depending on the element type):
 | | Alignment (label / block) | **Left / Centre / Right**. For a block on its own row this is a position on the **whole canvas**: choosing it snaps the layer there (and clears any horizontal move you made by dragging). |
 | | Label font | Family, size, bold / italic, colour |
 | **Body** | Body font | Family, size, style, colour |
-| | Burp-style syntax colouring | Colours for headers, JSON keys / strings / numbers, parameters (also the names and values in `Cookie` and `Set-Cookie` headers and the fields of `multipart/form-data` bodies), tags |
+| | Burp-style syntax colouring | Colours for headers, JSON keys / strings / numbers, parameters, HTML / XML tags, attribute names and values (also the names and values in `Cookie` and `Set-Cookie` headers and the fields of `multipart/form-data` bodies), tags |
 | | Body background | Optional fill behind the text |
 | **Fit** | Wrap at columns (0 = off) | Maximum characters per line |
 | | Wrap long lines | On = wrap, off = cut with `...` |
@@ -830,7 +831,8 @@ Top bar or preview toolbar -> **Global settings...** (non-modal; changes apply i
 | **Colours** | Image background, separator line colour |
 | **Spacing** (1x px) | Separator thickness, outer margin, gap between rows, gap between side-by-side blocks, gap between label and body |
 | **Defaults for NEW captures** | Max screenshot width, wrap at columns, max lines per block, wrap long lines, output scale (existing blocks keep their own values) |
-| **Syntax colours** | JSON key / string / number, parameter name / value, markup tag, header name (Burp light theme by default) |
+| **Syntax colours** | JSON key / string / number, parameter name / value, markup tag, header name (Burp light theme by default). In HTML / XML, *Markup tag* colours the tag names, *Parameter name* the attribute names, *Parameter value* the attribute values (with their quotes) and *JSON string* the doctype and comments; brackets and text stay plain, as in Burp. |
+| **Export settings... / Import settings...** | Save all of the above to a `burpshot-settings.json` file and load it on another machine or in another Burp. Import asks first, only reads known text values from the file, and clamps every number to the range the dialog allows, so a wrong or tampered file cannot break BurpShot. The file contains no captures, passwords or Share destinations. |
 
 ---
 

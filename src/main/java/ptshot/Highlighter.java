@@ -166,18 +166,83 @@ final class Highlighter {
         }
     }
 
+    /**
+     * HTML / XML as Burp colours it: the brackets and the text between tags stay plain, tag names use the markup colour, attribute names
+     * the parameter-name colour, attribute values (with their quotes) the parameter-value colour, and a doctype / comment the string colour.
+     */
     private static void markup(String t, int s, Color[] c, Color[] syn) {
         int n = t.length(), i = s;
         while (i < n) {
-            if (t.charAt(i) == '<') {
-                int j = t.indexOf('>', i);
-                j = j < 0 ? n : j + 1;
-                paint(c, i, j, syn[Settings.K_TAG]);
-                i = j;
-            } else {
+            if (t.charAt(i) != '<') {
                 i++;
+                continue;
+            }
+            if (t.startsWith("<!--", i)) {
+                int e = t.indexOf("-->", i + 4);
+                e = e < 0 ? n : e + 3;
+                paint(c, i, e, syn[Settings.K_STR]);
+                i = e;
+                continue;
+            }
+            if (i + 1 < n && (t.charAt(i + 1) == '!' || t.charAt(i + 1) == '?')) { // <!DOCTYPE ...>, <?xml ...?>, <![CDATA[ ... ]]>
+                int e = t.startsWith("<![CDATA[", i) ? t.indexOf("]]>", i) : tagEnd(t, i);
+                e = e < 0 ? n : (t.startsWith("<![CDATA[", i) ? e + 3 : e);
+                paint(c, i, e, syn[Settings.K_STR]);
+                i = e;
+                continue;
+            }
+            int e = tagEnd(t, i), p = i + 1;
+            if (p < e && t.charAt(p) == '/') p++;
+            int ns = p;
+            while (p < e && !Character.isWhitespace(t.charAt(p)) && t.charAt(p) != '>' && t.charAt(p) != '/') p++;
+            if (p == ns) { // a lone '<' in text
+                i++;
+                continue;
+            }
+            paint(c, ns, p, syn[Settings.K_TAG]);
+            while (p < e) {
+                char ch = t.charAt(p);
+                if (Character.isWhitespace(ch) || ch == '/' || ch == '>') {
+                    p++;
+                    continue;
+                }
+                int as = p;
+                while (p < e && !Character.isWhitespace(t.charAt(p)) && t.charAt(p) != '=' && t.charAt(p) != '>' && t.charAt(p) != '/') p++;
+                paint(c, as, p, syn[Settings.K_PNAME]);
+                int q = p;
+                while (q < e && Character.isWhitespace(t.charAt(q))) q++;
+                if (q < e && t.charAt(q) == '=') {
+                    q++;
+                    while (q < e && Character.isWhitespace(t.charAt(q))) q++;
+                    int vs = q;
+                    if (q < e && (t.charAt(q) == '"' || t.charAt(q) == '\'')) {
+                        int qe = t.indexOf(t.charAt(q), q + 1);
+                        q = (qe < 0 || qe >= e) ? e : qe + 1;
+                    } else {
+                        while (q < e && !Character.isWhitespace(t.charAt(q)) && t.charAt(q) != '>') q++;
+                    }
+                    paint(c, vs, q, syn[Settings.K_PVAL]);
+                    p = q;
+                }
+            }
+            i = e;
+        }
+    }
+
+    /** Index just past the '>' that closes the tag starting at {@code from}, skipping quoted attribute values. */
+    private static int tagEnd(String t, int from) {
+        char q = 0;
+        for (int i = from + 1; i < t.length(); i++) {
+            char ch = t.charAt(i);
+            if (q != 0) {
+                if (ch == q) q = 0;
+            } else if (ch == '"' || ch == '\'') {
+                q = ch;
+            } else if (ch == '>') {
+                return i + 1;
             }
         }
+        return t.length();
     }
 
     /** Cookie / Set-Cookie values: "name=value; name=value" - names like parameter names, values like parameter values. */
