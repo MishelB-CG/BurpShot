@@ -140,7 +140,11 @@ final class Term {
 
     static Look look(Block b) {
         Preset p = preset(b.preset);
-        return "LIGHT".equals(b.theme) ? p.light : p.dark;
+        Look l = "LIGHT".equals(b.theme) ? p.light : p.dark;
+        // a background the user set that is light while the theme is dark (or the reverse): take the matching look, so the command
+        // and default text stay readable (e.g. bold black on white, not bold white)
+        if (b.background != null && dark(b.background) != dark(l.bg)) l = l == p.light ? p.dark : p.light;
+        return l;
     }
 
     static Color[] palette(Block b) {

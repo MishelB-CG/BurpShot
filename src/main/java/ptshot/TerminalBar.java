@@ -125,6 +125,7 @@ final class TerminalBar extends JPanel {
         Term.Preset p = Term.preset(presetName);
         blk.preset = p.name;
         blk.theme = themeName;
+        blk.background = null; // so the look follows the chosen theme, not the old background
         Term.Look lk = Term.look(blk);
         blk.background = lk.bg;
         if (blk.bodyFont != null) blk.bodyFont.color = lk.fg;
