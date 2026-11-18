@@ -384,6 +384,65 @@ final class Term {
         return parse(raw, preset("Windows cmd (clink)").dark.pal, Color.BLACK, Color.WHITE).text;
     }
 
+    /** Index just after the escape sequence that starts with the ESC at {@code i} (CSI, OSC or a two-character escape). */
+    private static int escEnd(String raw, int i) {
+        int n = raw.length();
+        if (i + 1 < n && raw.charAt(i + 1) == '[') {
+            int j = i + 2;
+            while (j < n && (raw.charAt(j) < 0x40 || raw.charAt(j) > 0x7e)) j++;
+            return Math.min(n, j + 1);
+        }
+        if (i + 1 < n && raw.charAt(i + 1) == ']') {
+            int j = i + 2;
+            while (j < n && raw.charAt(j) != '\u0007' && !(raw.charAt(j) == '\u001b' && j + 1 < n && raw.charAt(j + 1) == '\\')) j++;
+            if (j >= n) return n;
+            return raw.charAt(j) == '\u0007' ? j + 1 : Math.min(n, j + 2);
+        }
+        return Math.min(n, i + 2);
+    }
+
+    /** Raw index of every character of the editor view ({@link #clean}): everything except escape sequences and carriage returns. */
+    private static int[] cleanMap(String raw) {
+        int[] map = new int[raw.length()];
+        int k = 0;
+        for (int i = 0; i < raw.length(); ) {
+            char ch = raw.charAt(i);
+            if (ch == '\u001b') {
+                i = escEnd(raw, i);
+            } else {
+                if (ch != '\r') map[k++] = i;
+                i++;
+            }
+        }
+        return java.util.Arrays.copyOf(map, k);
+    }
+
+    /** The text of raw terminal output without its colour / control sequences: what the editor shows (the colours stay in the layer). */
+    static String clean(String raw) {
+        if (raw == null) return "";
+        int[] map = cleanMap(raw);
+        StringBuilder sb = new StringBuilder(map.length);
+        for (int i : map) sb.append(raw.charAt(i));
+        return sb.toString();
+    }
+
+    /** Inserts {@code ins} at position {@code at} of the editor view; the new text takes the colour of the character before it. */
+    static String insertClean(String raw, int at, String ins) {
+        int[] map = cleanMap(raw);
+        int p = at <= 0 ? 0 : (at - 1 < map.length ? map[at - 1] + 1 : raw.length());
+        return raw.substring(0, p) + unshow(ins).replace("\r", "") + raw.substring(p);
+    }
+
+    /** Removes {@code len} characters at {@code at} of the editor view; the colour codes between them are kept, so later text keeps its colour. */
+    static String removeClean(String raw, int at, int len) {
+        int[] map = cleanMap(raw);
+        java.util.BitSet gone = new java.util.BitSet(raw.length());
+        for (int k = at; k < at + len && k < map.length; k++) if (k >= 0) gone.set(map[k]);
+        StringBuilder sb = new StringBuilder(raw.length());
+        for (int i = 0; i < raw.length(); i++) if (!gone.get(i)) sb.append(raw.charAt(i));
+        return sb.toString();
+    }
+
     /** ESC characters are shown as a visible symbol in the editor and converted back when read. */
     static String show(String raw) {
         return raw == null ? "" : raw.replace('\u001b', '\u241b');

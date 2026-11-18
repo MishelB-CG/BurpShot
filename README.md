@@ -55,6 +55,7 @@ java -cp "out;libs/jsch-2.28.8.jar" ptshot.BeautifySelfTest   # JS / CSS / inlin
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.HighlightSelfTest   # syntax colours, incl. Cookie / Set-Cookie
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.WindowSelfTest   # filters merged with edits; windowed long bodies
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.SettingsFileSelfTest   # export / import of the global settings
+java -cp "out;libs/jsch-2.28.8.jar" ptshot.TermEditSelfTest   # terminal layer: editing the text keeps the colour codes
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.BorderSelfTest   # layer / capture borders: saving, drawing, clamping
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.RecoverySelfTest   # mixed / foreign locked captures, 'Forgot the password'
 java -cp "out;libs/jsch-2.28.8.jar" ptshot.Fuzz 40   # random action sequences must never lose or lock out data
@@ -625,8 +626,7 @@ For PoCs that were **not** run through Burp: a terminal window look-alike with y
 
 **Colours from your terminal.** ANSI colour codes in pasted text are kept: 16 colours, 256-colour, true colour, bold (brightens the 8 basic
 colours), underline and reverse video. Most terminals copy plain text without colours, so to keep colours force them on in the tool
-(`ls --color=always`, `nmap` output, `script`...) or copy from a source that preserves escape sequences. Escape characters appear as a small
-symbol (`␛`) in the editor. Other control sequences (cursor movement, clear screen, window title) are dropped. With plain text, pick the nearest
+(`ls --color=always`, `nmap` output, `script`...) or copy from a source that preserves escape sequences. The editor shows **just the text**: the colour codes are hidden but stay in the layer (and are drawn in the preview), and what you type or delete keeps them in place - new text takes the colour of the character before it. Tick **Show colour codes** in the Terminal bar to see and edit the raw codes (`␛[01;32m`) instead. Other control sequences (cursor movement, clear screen, window title) are dropped. With plain text, pick the nearest
 scheme and recolour by hand. A terminal can be moved, resized (width) and cropped like any layer.
 
 ---

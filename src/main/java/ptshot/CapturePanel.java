@@ -350,10 +350,25 @@ final class CapturePanel extends JPanel {
             }
         });
         ta.getDocument().addDocumentListener(new DocumentListener() {
-            void ch() {
+            void ch(DocumentEvent ev) {
                 if (loading || cur == null || cur.kind == Block.Kind.IMAGE || cur.kind == Block.Kind.TABLE) return;
                 if (cur.kind == Block.Kind.TERMINAL) {
-                    cur.raw = Term.unshow(ta.getText());
+                    if (termBar.showCodes.isSelected()) {
+                        cur.raw = Term.unshow(ta.getText());
+                    } else { // the editor shows the text without its colour codes: apply the edit to the raw text underneath
+                        try {
+                            if (ev.getType() == DocumentEvent.EventType.INSERT) cur.raw = Term.insertClean(cur.raw, ev.getOffset(), ta.getText(ev.getOffset(), ev.getLength()));
+                            else if (ev.getType() == DocumentEvent.EventType.REMOVE) cur.raw = Term.removeClean(cur.raw, ev.getOffset(), ev.getLength());
+                        } catch (javax.swing.text.BadLocationException ex) {
+                            cur.raw = Term.unshow(ta.getText());
+                        }
+                        final Block edited = cur;
+                        SwingUtilities.invokeLater(() -> { // pasted escape codes / carriage returns: show the clean text again
+                            if (cur != edited || termBar.showCodes.isSelected() || ta.getDocument().getLength() > 400_000) return;
+                            String want = Term.clean(edited.raw);
+                            if (!want.equals(ta.getText())) reloadTerminalEditor();
+                        });
+                    }
                     cur.text = Term.strip(cur.raw);
                 } else {
                     if (cur.isHttp()) cur.applyEditorText(ta.getText());
@@ -364,15 +379,14 @@ final class CapturePanel extends JPanel {
             }
 
             public void insertUpdate(DocumentEvent e) {
-                ch();
+                ch(e);
             }
 
             public void removeUpdate(DocumentEvent e) {
-                ch();
+                ch(e);
             }
 
             public void changedUpdate(DocumentEvent e) {
-                ch();
             }
         });
 
@@ -433,6 +447,7 @@ final class CapturePanel extends JPanel {
             refresh();
         });
         termBar.setVisible(false);
+        termBar.showCodes.addActionListener(e -> reloadTerminalEditor());
         JPanel north = new JPanel();
         north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
         north.add(filterPanel);
@@ -1370,7 +1385,7 @@ final class CapturePanel extends JPanel {
                 search.setVisible(!img && !tbl);
                 if (tbl) tableEd.load(b);
                 if (b.isHttp() && b.genText == null) b.genText = b.generate(); // base for merging later filter changes with manual edits
-                ta.setText(img ? "(image block - no text)" : b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.editorText());
+                ta.setText(img ? "(image block - no text)" : b.kind == Block.Kind.TERMINAL ? termText(b) : b.editorText());
                 ta.setCaretPosition(0);
                 incFirst.setSelected(b.incFirst);
                 incHeaders.setSelected(b.incHeaders);
@@ -1934,6 +1949,21 @@ final class CapturePanel extends JPanel {
         refresh();
     }
 
+    /** What the editor shows for a terminal layer: the text only (default), or the raw text with visible escape characters. */
+    private String termText(Block b) {
+        return termBar != null && termBar.showCodes.isSelected() ? Term.show(b.raw) : Term.clean(b.raw);
+    }
+
+    /** Shows the terminal layer's text in the editor again (after switching between clean and raw view, or after a paste). */
+    private void reloadTerminalEditor() {
+        if (cur == null || cur.kind != Block.Kind.TERMINAL) return;
+        int caret = ta.getCaretPosition();
+        loading = true;
+        ta.setText(termText(cur));
+        ta.setCaretPosition(Math.min(caret, ta.getDocument().getLength()));
+        loading = false;
+    }
+
     /** {anchor text, occurrence} of the editor selection; terminal layers map it onto the visible (escape-free) text. */
     private Object[] selAnchor() {
         String t = ta.getText();
@@ -2138,7 +2168,7 @@ final class CapturePanel extends JPanel {
             int i = ((i0 + dir * st2) % n + n) % n;
             Block b = model.get(i);
             if (b.overlay || b.kind == Block.Kind.IMAGE || b.kind == Block.Kind.TABLE) continue;
-            String t = b.kind == Block.Kind.TERMINAL ? Term.show(b.raw) : b.text;
+            String t = b.kind == Block.Kind.TERMINAL ? termText(b) : b.text;
             if (t != null && pat.matcher(t).find()) {
                 list.setSelectedValue(b, true);
                 return true;

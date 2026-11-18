@@ -31,6 +31,8 @@ final class TerminalBar extends JPanel {
     private final JTextField title = new JTextField(14);
     private final ColorButton bgBtn, fgBtn;
     private final JCheckBox cmdStyle = new JCheckBox("Highlight the command"), indent = new JCheckBox("Colour by indentation");
+    /** Off (default): the editor shows only the text and keeps the colours. On: it shows the raw escape codes (ESC[01;32m ...) for editing. */
+    final JCheckBox showCodes = new JCheckBox("Show colour codes");
 
     TerminalBar(Runnable onChange) {
         super();
@@ -68,6 +70,9 @@ final class TerminalBar extends JPanel {
         pal.setFocusable(false);
         pal.addActionListener(e -> editPalette());
         r3.add(pal);
+        showCodes.setToolTipText("Show and edit the raw ANSI escape codes in the editor (off: the editor shows just the text; its colours are kept and still drawn in the preview)");
+        showCodes.setFocusable(false);
+        r3.add(showCodes);
         add(r1);
         add(r2);
         add(r3);
